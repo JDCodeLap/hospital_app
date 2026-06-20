@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>병원 앱 색감 시안</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    background: #f0f2f5;
+    color: #1a1a1a;
+    padding: 32px 16px;
+    line-height: 1.5;
+  }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 8px; }
+  .sub { text-align: center; color: #666; margin-bottom: 32px; font-size: 14px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 24px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .card {
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    background: #fff;
+  }
+  .card-label {
+    padding: 14px 18px;
+    font-weight: 700;
+    font-size: 15px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .card-label .num { opacity: 0.5; margin-right: 6px; }
+
+  /* 미니 앱 미리보기 공통 */
+  .preview { padding: 18px; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; font-weight: 600;
+  }
+  .patient {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-radius: 12px; margin-bottom: 12px;
+  }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; }
+  .patient .name { font-weight: 600; font-size: 14px; }
+  .patient .meta { font-size: 12px; opacity: 0.7; }
+  .alert {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 14px; border-radius: 12px; margin-bottom: 12px;
+    font-size: 13px; font-weight: 600;
+  }
+  .btn {
+    text-align: center; padding: 12px; border-radius: 12px;
+    font-weight: 700; font-size: 14px;
+  }
+  .swatches { display: flex; gap: 6px; padding: 0 18px 18px; }
+  .sw { flex: 1; height: 28px; border-radius: 6px; }
+
+  /* 1. 깨끗한 의료 (라이트/블루) */
+  .t1 .preview { background: #f7fafc; }
+  .t1 .topbar { background: #2563eb; color: #fff; }
+  .t1 .patient { background: #fff; border: 1px solid #e2e8f0; }
+  .t1 .avatar { background: #93c5fd; }
+  .t1 .name { color: #0f172a; }
+  .t1 .alert { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+  .t1 .btn { background: #2563eb; color: #fff; }
+
+  /* 2. 청록 케어 (라이트/틸) */
+  .t2 .preview { background: #f0fdfa; }
+  .t2 .topbar { background: #0d9488; color: #fff; }
+  .t2 .patient { background: #fff; border: 1px solid #ccfbf1; }
+  .t2 .avatar { background: #5eead4; }
+  .t2 .name { color: #134e4a; }
+  .t2 .alert { background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
+  .t2 .btn { background: #0d9488; color: #fff; }
+
+  /* 3. 차분한 다크 (다크모드) */
+  .t3 .preview { background: #0f172a; }
+  .t3 .topbar { background: #1e293b; color: #e2e8f0; }
+  .t3 .patient { background: #1e293b; border: 1px solid #334155; }
+  .t3 .avatar { background: #38bdf8; }
+  .t3 .name { color: #f1f5f9; }
+  .t3 .patient .meta { color: #94a3b8; }
+  .t3 .alert { background: #422006; color: #fbbf24; border: 1px solid #854d0e; }
+  .t3 .btn { background: #38bdf8; color: #0f172a; }
+
+  /* 4. 밝고 친근 (그린/소프트) */
+  .t4 .preview { background: #f6fef9; }
+  .t4 .topbar { background: #16a34a; color: #fff; }
+  .t4 .patient { background: #fff; border: 1px solid #dcfce7; }
+  .t4 .avatar { background: #86efac; }
+  .t4 .name { color: #14532d; }
+  .t4 .alert { background: #fef9c3; color: #ca8a04; border: 1px solid #fde68a; }
+  .t4 .btn { background: #16a34a; color: #fff; }
+</style>
+</head>
+<body>
+  <h1>🏥 병원 앱 색감 시안 4종</h1>
+  <p class="sub">같은 화면을 4가지 분위기로 만들어봤어요. 마음에 드는 번호를 골라주세요!</p>
+  <div class="grid">
+
+    <!-- 1 -->
+    <div class="card t1">
+      <div class="card-label"><span class="num">1</span>깨끗한 의료 (클래식 블루)</div>
+      <div class="preview">
+        <div class="topbar"><span>환자 통합 화면</span><span>🔔</span></div>
+        <div class="patient">
+          <div class="avatar"></div>
+          <div><div class="name">김철수 (58세)</div><div class="meta">내과 · 외래 진료중</div></div>
+        </div>
+        <div class="alert">⚠️ 페니실린 알레르기 — 처방 주의</div>
+        <div class="btn">다음 단계로</div>
+      </div>
+      <div class="swatches">
+        <div class="sw" style="background:#2563eb"></div>
+        <div class="sw" style="background:#93c5fd"></div>
+        <div class="sw" style="background:#f7fafc;border:1px solid #ddd"></div>
+        <div class="sw" style="background:#dc2626"></div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="card t2">
+      <div class="card-label"><span class="num">2</span>청록 케어 (부드러운 틸)</div>
+      <div class="preview">
+        <div class="topbar"><span>환자 통합 화면</span><span>🔔</span></div>
+        <div class="patient">
+          <div class="avatar"></div>
+          <div><div class="name">김철수 (58세)</div><div class="meta">내과 · 외래 진료중</div></div>
+        </div>
+        <div class="alert">⚠️ 페니실린 알레르기 — 처방 주의</div>
+        <div class="btn">다음 단계로</div>
+      </div>
+      <div class="swatches">
+        <div class="sw" style="background:#0d9488"></div>
+        <div class="sw" style="background:#5eead4"></div>
+        <div class="sw" style="background:#f0fdfa;border:1px solid #ddd"></div>
+        <div class="sw" style="background:#ea580c"></div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="card t3">
+      <div class="card-label"><span class="num">3</span>차분한 다크 (눈 편한 야간모드)</div>
+      <div class="preview">
+        <div class="topbar"><span>환자 통합 화면</span><span>🔔</span></div>
+        <div class="patient">
+          <div class="avatar"></div>
+          <div><div class="name">김철수 (58세)</div><div class="meta">내과 · 외래 진료중</div></div>
+        </div>
+        <div class="alert">⚠️ 페니실린 알레르기 — 처방 주의</div>
+        <div class="btn">다음 단계로</div>
+      </div>
+      <div class="swatches">
+        <div class="sw" style="background:#38bdf8"></div>
+        <div class="sw" style="background:#1e293b"></div>
+        <div class="sw" style="background:#0f172a"></div>
+        <div class="sw" style="background:#fbbf24"></div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="card t4">
+      <div class="card-label"><span class="num">4</span>밝고 친근 (소프트 그린)</div>
+      <div class="preview">
+        <div class="topbar"><span>환자 통합 화면</span><span>🔔</span></div>
+        <div class="patient">
+          <div class="avatar"></div>
+          <div><div class="name">김철수 (58세)</div><div class="meta">내과 · 외래 진료중</div></div>
+        </div>
+        <div class="alert">⚠️ 페니실린 알레르기 — 처방 주의</div>
+        <div class="btn">다음 단계로</div>
+      </div>
+      <div class="swatches">
+        <div class="sw" style="background:#16a34a"></div>
+        <div class="sw" style="background:#86efac"></div>
+        <div class="sw" style="background:#f6fef9;border:1px solid #ddd"></div>
+        <div class="sw" style="background:#ca8a04"></div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

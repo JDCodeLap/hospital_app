@@ -1,0 +1,25 @@
+# ── 루트 안전망 .gitignore (하위 폴더에도 각자 .gitignore 있음) ──
+
+# 비밀정보 — 절대 커밋 금지 (.env.example 템플릿은 허용)
+.env
+.env.local
+.env.*.local
+
+# 파이썬 가상환경 / 캐시
+.venv/
+__pycache__/
+*.pyc
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+
+# 빌드 산출물 / 로그 / 임시
+*.log
+*.tsbuildinfo
+
+# OS / 에디터
+.DS_Store
+Thumbs.db

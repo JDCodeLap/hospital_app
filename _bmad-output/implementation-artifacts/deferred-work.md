@@ -1,0 +1,78 @@
+# Deferred Work (나중에 처리할 항목)
+
+## Deferred from: code review of story 1-1-프로젝트-기본-세팅 (2026-06-20)
+
+- 색 정의 이중화: DESIGN 토큰(`--color-bg-base`, `--color-accent-primary` 등)과 shadcn 의미색(`--primary`, `--ring`, `--destructive` 등)이 같은 hex 값을 각각 따로 들고 있어, 팔레트 변경 시 여러 곳을 고쳐야 하고 값이 어긋날 위험이 있음. 단일 출처(예: shadcn 변수를 `--color-*` 토큰으로 매핑)로 리팩터 권장. 현재 동작에는 문제 없음. (frontend/src/app/globals.css)
+
+## Deferred from: code review of story 1-2-fastapi-백엔드-postgresql-연결 (2026-06-20)
+
+- 시드(seed) 멀티워커 중복: `lifespan`의 "비어있으면 시드" 로직은 `uvicorn --workers N`/gunicorn 멀티프로세스 동시 시작 시 각 워커가 동시에 비어있다고 판단해 최대 3×N행 중복 삽입 가능. `TestItem.name`에 유니크 제약 없음. 단일워커 개발에선 무해. 멀티워커 배포 전 유니크 제약 또는 `INSERT ... ON CONFLICT DO NOTHING`, 또는 시드를 별도 1회성 스크립트로 분리. (backend/app/main.py, models.py)
+- 프론트 API 주소 폴백: `NEXT_PUBLIC_API_BASE_URL`는 빌드 시점에 박히는데 미설정 시 `http://localhost:8000`로 조용히 폴백 → 운영 배포에서 사용자에게 항상 연결 실패로 보일 수 있음. 비로컬 배포 시 이 값 필수화(폴백 제거 또는 경고). (frontend/src/components/BackendStatus.tsx)
+- DB 마이그레이션: 현재 `SQLModel.metadata.create_all`은 없는 테이블만 생성하고 기존 테이블 변경(ALTER)은 못 함. 스키마가 커지기 시작하는 Story 2.1(환자 스키마) 전후로 Alembic 도입 검토. (backend/app/database.py)
+
+## Deferred from: code review of story 1-3-직원-로그인 (2026-06-20)
+
+- 시드 멀티워커 동시성: `lifespan`에서 Staff 시드 시 멀티워커 동시 시작이면 `username` unique 충돌로 IntegrityError(부팅 크래시 가능), TestItem은 중복 삽입. 단일워커 개발에선 무해. `try/except IntegrityError: rollback` 또는 `ON CONFLICT DO NOTHING`/advisory lock. (backend/app/main.py)
+- 토큰 보관 방식: 현재 access token을 localStorage에 저장 → XSS 시 8시간(TTL) 동안 탈취 가능. 운영 단계에서 httpOnly+Secure+SameSite 쿠키 전환(이 경우 CORS allow_credentials=True + 출처 화이트리스트) 또는 TTL 단축 + 강한 CSP. (frontend/src/lib/auth.ts, backend)
+- 시드 기본 계정: `nurse1/test1234`는 로컬 개발 편의용. 비로컬(스테이징/운영) 배포 시 공개된 약한 자격증명이 되므로 dev 전용 플래그로 시드 차단 또는 최초 시드 시 랜덤 비번/강제 변경. (backend/app/main.py)
+- 로그인 타이밍 사용자 열거: 존재하지 않는 username은 `verify_password`를 건너뛰어 응답이 더 빠름 → 계정 존재 여부가 시간으로 노출. 없는 계정에도 더미 bcrypt 검증을 돌려 시간 평준화. (backend/app/main.py)
+- JWT 비밀키 강도 검증: `jwt_secret_key`가 너무 짧으면 HS256 토큰이 오프라인 무차별 대입에 취약. 시작 시 최소 길이(≥32바이트) 검증 추가. (현재 키는 token_hex(32)=64자로 충분, 향후 안전장치) (backend/app/config.py)
+
+## Deferred from: code review of story 1-4-로그인-보호-로그아웃 (2026-06-20)
+
+- ⚠️ **(Epic 2 진입 전 필독) RSC payload에 보호 본문이 직렬화됨**: 현재 `AuthGuard`(클라이언트 컴포넌트)가 Server Component로 받은 children을 감싸므로, 보호 화면의 정적 뼈대(UI 텍스트)가 페이지 소스의 React 서버 렌더 payload에 같이 실린다. 화면에는 "확인 중…"만 보여 **시각적 누출은 없고**, 1.4 홈은 민감 데이터가 없어 무해. 그러나 **Epic 2 환자 화면에서 환자 데이터를 Server Component로 미리 렌더하면 미인증 사용자에게 PHI가 페이지 소스로 노출될 수 있음.** 규칙: 환자 데이터는 통과(authed) 후 클라이언트에서 토큰 달아 호출(BackendStatus 패턴)하고 Server Component 프리렌더 금지. (런타임 검증에서 발견) (frontend/src/components/AuthGuard.tsx, app/page.tsx)
+- 크로스탭 로그아웃 미동기화: 앱을 두 탭에 열어두고 한 탭에서 로그아웃해도 다른 탭은 보호 화면을 계속 표시(마운트 시 1회만 검증). 공유 병원 단말에서 PHI가 남을 수 있음. `window.addEventListener("storage", ...)`로 `hospital_token` 삭제 감지 시 다른 탭도 /login으로 보내기 검토. (frontend/src/components/AuthGuard.tsx, LogoutButton.tsx)
+- 세션 중 토큰 만료 재검증 없음: `AuthGuard`는 마운트 시 한 번만 `/api/auth/me`를 확인. 장시간 열어둔 화면에서 토큰이 만료돼도 그 화면 자체는 재검증/리다이렉트하지 않음(이후 API 호출은 401). 주기적 재검증 또는 전역 401 인터셉터 검토. (frontend/src/components/AuthGuard.tsx)
+- 서버측 로그아웃/토큰 무효화 없음(soft logout): 로그아웃은 localStorage 토큰만 삭제. stateless JWT라 탈취된 토큰은 만료까지 유효. 필요 시 서버 revocation(블랙리스트) 또는 짧은 TTL + refresh. (frontend/src/components/LogoutButton.tsx, backend)
+- API_BASE HTTPS 미강제: `lib/api.ts`가 미설정 시 `http://localhost:8000`로 폴백하고 https 강제가 없음. 비로컬 배포에서 `http://`면 Bearer 토큰이 평문 전송될 수 있음. 기존 1-2 deferred "프론트 API 주소 필수화"와 함께 비로컬 배포 시 https 강제/필수화. (frontend/src/lib/api.ts)
+- 클라이언트 전용 가드의 한계: `AuthGuard`는 화면 노출을 막는 보조 수단일 뿐, JS 우회 시 보호되지 않음. 현재 실제 자물쇠는 백엔드 `get_current_user`(검증됨)이며, 정식 보호 경계는 1.3 deferred(localStorage→httpOnly 쿠키)와 함께 미들웨어 기반으로 업그레이드 시 확보. (frontend/src/components/AuthGuard.tsx, backend/app/security.py)
+
+## Deferred from: code review of story 2-1-환자-데이터-구조-샘플-데이터 (2026-06-20)
+
+- 멀티워커 시드 경합: `seed_patients`/Staff/TestItem 시드 모두 "비어있으면 삽입" 패턴이라 `uvicorn --workers N` 동시 시작 시 등록번호/username unique 충돌(IntegrityError) 가능. lifespan은 `OperationalError`만 잡아 **부팅 크래시**로 이어질 수 있음. 단일워커 개발에선 무해. 멀티워커 배포 전 `try/except IntegrityError: rollback` 또는 `pg_advisory_xact_lock`/`ON CONFLICT DO NOTHING`, 또는 시드를 별도 1회성 스크립트로 분리. (backend/app/main.py) — 1-2/1-3 동일 항목과 함께 일괄 처리 권장
+- 직군별 권한 분기 + PHI 접근 감사로그: 현재 `/api/patients`·`/{id}`는 로그인만 확인(인증)하고 권한(인가) 분기가 없어 **로그인한 직원이면 모든 환자 열람**. 이는 1차 설계(NFR2: 단순 접근). 역할(의사/간호사/관리자)별 접근 범위·환자 접근 감사로그(누가 어떤 환자를 봤는지)는 **Epic 5(권한 설정)**에서 구현. 그 전까지 순차 id 열거(IDOR)는 권한 경계가 없어 추가 위험은 아님. (backend/app/main.py)
+- `GET /api/patients` 페이지네이션 없음: 전체 환자를 한 번에 반환. 환자 수가 커지면 응답 비대·전체 명단 노출. 2.2(검색) 도입 시 `q`/`limit`/`offset` 추가로 함께 정리. (backend/app/main.py)
+- 코드값 표준화: `gender`(기본 "기타" vs 시드 "M"/"F")·`flag`·`status`·`current_stage`가 자유 문자열이고 어휘가 섞임. 화면 표시 일관성을 위해 enum/표준 코드값 정리 검토. (backend/app/models.py)
+- `LabResult.value` 자유문자열(미검증): 결과값이 문자열이라 수치 비교 불가. Epic 3 안전경고(FR4)나 이상치 판정이 `value`를 수치 파싱하려면 flag/value 정합성·단위 표준이 필요. (backend/app/models.py)
+
+## Deferred from: code review of story 2-2-환자-검색 (2026-06-20)
+
+- 페이지네이션/전체목록 PHI량: `GET /api/patients`는 q가 없으면 전체 환자를 무제한 반환(allergies 포함). allergies를 요약에 넣은 것은 카드 알레르기 배지용 스펙 결정이라 의도된 것. 페이지네이션(`limit`/`offset`)은 2-1 deferred에도 동일 항목이 있으며, 환자 수가 커지면 함께 정리. (backend/app/main.py)
+- 검색어 길이 상한 없음: 검색 input에 `maxLength`가 없어 초장문 입력 시 URL 길이 초과(414/400) → 일반 "연결 실패" 메시지로 오안내될 수 있음. 영향 매우 낮음(현실적 입력 아님). 필요 시 `<input maxLength={…}>` + 백엔드 길이 검증. (frontend/src/components/PatientSearch.tsx)
+
+## Deferred from: code review of story 2-3-환자-통합-화면 (2026-06-20)
+
+- 403→강제 로그아웃 재검토(RBAC): PatientDetail(및 2.2 PatientSearch·AuthGuard)은 401/403을 동일 처리(토큰 삭제+로그인). 403은 "인증됐으나 권한 없음"이라, **Epic 5에서 역할별 권한(인가)을 도입하면** 정당한 권한거부(예: 다른 부서 환자 접근 차단)가 강제 재로그인으로 오인될 수 있음. 현재는 RBAC가 없어 403이 발생하지 않으므로 무해. Epic 5에서 401(재로그인)과 403(권한 안내)을 분리. (frontend/src/components/PatientDetail.tsx, PatientSearch.tsx, AuthGuard.tsx)
+- 오류 문구의 인프라 주소 노출: PatientDetail·PatientSearch의 연결 실패 안내가 `http://localhost:8000`을 그대로 표기. PHI는 아니나 배포 시 백엔드 호스트가 사용자에게 노출됨. 1-2/1-4 deferred(API base 필수화·HTTPS 강제)와 함께 비로컬 배포 전 일반 메시지로 정리. (frontend/src/components/PatientDetail.tsx, PatientSearch.tsx)
+- 거대 id int4 오버플로 500: `/patients/<20자리 숫자>` 직접 접속 시 Postgres int4 범위 초과로 백엔드 500(프론트는 error 상태로 표시). 현실적 입력 아님(낮음). 필요 시 백엔드 id 범위 검증 또는 프론트 자릿수 제한. (backend/app/main.py get_patient)
+
+## Deferred from: code review of story 2-4-입력-즉시-반영 (2026-06-20)
+
+- WS 토큰 쿼리 노출(로그 유출): WebSocket 인증 토큰(JWT)을 `ws://.../ws/patients/{id}?token=...` 쿼리로 전달 → Uvicorn/프록시 액세스 로그·브라우저 히스토리에 평문으로 남아 만료 전까지 재사용 가능. 브라우저 WebSocket이 Authorization 헤더를 못 붙이는 한계 때문. 운영 단계에서 **단명(수십 초) WS 전용 티켓** 발급 후 교환, 또는 서브프로토콜 기반 인증 검토. (backend/app/main.py patient_ws, frontend/src/components/PatientDetail.tsx)
+- async 엔드포인트의 동기 DB(이벤트 루프 블로킹): `add_visit`(async)와 WS 연결 시 토큰검증이 동기 SQLModel Session을 이벤트 루프에서 직접 호출 → 부하 시 모든 WebSocket 송수신이 정체될 수 있음. `def`+threadpool로 돌리거나 async DB 드라이버 도입. 단일 사용자/소규모 데모에선 무해. (backend/app/main.py)
+- WS Origin 미검증(CSWSH 방어심층): HTTP는 CORS로 출처를 제한하지만 WebSocket 엔드포인트는 Origin 검증이 없음. 현재 쿠키 기반이 아니라 토큰을 쿼리로 받으므로 교차 사이트 페이지가 토큰 없이는 악용 불가(실제 위험 낮음). 운영 시 WS에도 Origin 화이트리스트 추가로 일관성 확보. (backend/app/main.py patient_ws)
+- broadcast half-open 소켓 지연: `ConnectionManager.broadcast`가 구독자에게 순차 `await send_json` → 응답 없는(half-open, 노트북 절전 등) 소켓 하나가 OS TCP 타임아웃까지 전체 방송을 지연시킬 수 있음. send 타임아웃 또는 `asyncio.gather`로 병렬 팬아웃 검토. (backend/app/realtime.py)
+
+## Deferred from: code review of story 3-1-알레르기-금기-경고 (2026-06-20)
+
+- 위험 처방 오버라이드 감사로그 없음: 직원이 알레르기 경고(409)를 보고도 `acknowledged=true`로 처방하면, 누가/언제/어떤 충돌을 무시했는지 기록이 전혀 남지 않음(`Medication`에 acknowledged/처방자/타임스탬프 필드 없음). 환자 안전상 가치 있으나 권한·감사는 Epic 5 범위. `Medication`에 override 표시 컬럼 + 감사 테이블/로그 검토. (backend/app/main.py add_medication, models.py Medication)
+- 금기 판정 커버리지 한계: `check_contraindications`는 한국어 알레르기명 직접 부분일치 + 작은 계열 매핑(`CONTRAINDICATION_MAP`)까지만. 영문/상품명 약(Amoxicillin·Augmentin), NSAID·세팔로스포린 교차반응, 조영제 상품명(옴니파크·이오헥솔), 맵에 없는 알레르기 표기(예: 페니실린계·요오드)는 못 잡음 → 위험 처방이 경고 없이 통과 가능. 실제 약품 DB/DDI(약물상호작용) 엔진 도입이 필요하며 스토리에서 명시적으로 범위 밖으로 둔 사안. 운영 도입 시 표준 약품 코드(예: ATC) + 외부 상호작용 DB 연동 검토. (backend/app/safety.py)
+- async 엔드포인트의 동기 DB(이벤트 루프 블로킹): `add_medication`(및 2.4 `add_visit`/WS 인증)이 `async def`에서 동기 `Session` 사용 → 부하 시 이벤트 루프(모든 WS 포함) 정체. 2.4 코드리뷰의 동일 defer와 함께 처리. `def`+threadpool 또는 async 드라이버. (backend/app/main.py)
+- 쓰기 엔드포인트 멱등성 없음: 동시/중복 요청(프론트 더블클릭 패치 후에도 두 클라이언트면) 시 동일 처방이 두 번 저장 가능. visits 포함 쓰기 전반 사안. 멱등성 키 또는 중복 방지 제약 검토. (backend/app/main.py)
+
+## Deferred from: code review of story 3-2-안전-경고-배너-유지 (2026-06-20)
+
+- 확인(SafetyAck)이 알레르기 '내용'에 안 묶임 — ack가 `patient_id` 단위(환자당 1건)라, 환자의 `allergies`가 나중에 변경되면(새 알레르기 추가 등) 기존 ack가 그대로 유효해서 새 위험이 빨간 경고(행동 요구)가 아닌 차분한 '확인됨' 배너로 다운그레이드된다 → 아무도 검토 안 한 새 위험을 '확인됨'으로 표시하는 안전 갭. 현재 앱에 알레르기 편집 기능이 없어 트리거되지 않으며, 스토리에서 '확인 해제/만료/재확인'을 범위 밖으로 둔 사안. 알레르기 편집 기능(환자 정보 수정) 도입 시 SafetyAck에 알레르기 내용 스냅샷/해시(버전)를 함께 저장하고, 내용이 바뀌면 ack를 무효화(재무장)하도록 설계. (backend/app/models.py SafetyAck, main.py acknowledge_safety/get_patient)
+- `datetime.now()` 타임존 naive — `acknowledge_safety`의 `acknowledged_at = datetime.now()`(및 `add_visit`/`add_medication`의 `visited_at`/시각)가 타임존 없는 로컬 시간이라 `.isoformat()`에 offset이 없음 → 프론트 `new Date(iso)`가 브라우저 로컬로 해석해, 서버와 클라이언트 타임존이 다르면 표시 시각이 어긋남. `security.py`는 이미 `datetime.now(timezone.utc)` 사용. 단일 로컬 데모에선 무해. 배포 전 앱 전반의 시각 저장을 UTC(aware)로 통일하고 프론트에서 로컬 변환. (backend/app/main.py 전반)
+
+## Deferred from: code review of story 3-3-투약-시간-알림 (2026-06-20)
+
+- 자정 넘어가면 놓친(미투약) 약이 알림에서 사라짐 — `medication_alerts`가 "오늘 분"(`t <= current_hm` + `administered_date == today`)만 due로 계산하므로, 20:00 예정 약을 주지 않고 자정이 지나면 그 슬롯이 다음 날 20:00까지 알림 목록에서 빠진다(놓친 투약/연체 신호 없음 → 투약 누락 은폐 가능). 현재 스토리는 "HH:MM 일일 반복"으로 범위를 한정했고 진짜 연체 추적은 예정 시각을 datetime로 모델링해야 함. 후속: `Medication`에 예정 datetime/주기 모델 + "연체(overdue)" 상태 표시 + 미투약 슬롯 carryover 설계. (backend/app/main.py medication_alerts)
+- `datetime.now()` 타임존 naive(3.3에서도) — 알림 due 계산(`now.strftime("%H:%M")`)과 `administered_date`/`administered_at`이 서버 로컬 naive 시간. 서버(UTC)와 병원(KST) 타임존이 다르면 due 판정과 완료 날짜가 어긋남. 앱 전반(add_visit/add_medication/safety-ack 포함)과 함께 배포 전 UTC(aware)로 통일. (backend/app/main.py 전반)
+- 투약 schedule 편집 후 stale slot 완료 시 복구 경로 없음 — `administer_medication`이 `scheduled_time not in parse_schedule_times(med.schedule)`면 400을 던지는데, 화면에 이미 렌더된 옛 슬롯(스케줄이 바뀐 약)을 누르면 400이 나고 목록에서 정리되지 않는다. 현재 투약 수정 기능이 없어 트리거되지 않음. 투약 편집 기능 도입 시 알림 화면 reconcile(없는 슬롯 자동 제거) 처리. (backend/app/main.py administer_medication)
+
+## Deferred from: code review of story 3-4-필수-절차-체크리스트 (2026-06-20)
+
+- advance-stage 동시성 가드 없음(행 잠금/원자 전이 X): 동시 advance 또는 advance↔uncheck 경합 시 최악 idempotent 재커밋 또는 500 가능. **안전 게이트 우회는 아님**(첫 advance가 체크를 삭제 → 두 번째는 409). 단일워커 데모에선 미발생. 멀티워커 배포 시 `SELECT ... FOR UPDATE` 또는 조건부 `UPDATE patient SET current_stage=:nxt WHERE id=:id AND current_stage=:cur`(rowcount 확인)로 전이를 원자화. toggle uncheck도 동시 삭제 시 StaleDataError 가능 → try/except로 멱등화. (backend/app/main.py advance_stage, toggle_checklist)
+- 단계 진행 시 체크 기록 하드 삭제(감사 추적 소실): advance 시 그 환자의 ChecklistCheck(누가·언제 체크했는지 포함)를 전부 delete. 안전 게이트가 충족됐다는 "증거"가 사라져 사후 책임추적 불가. 스펙상 "다음 절차 위해 체크 초기화"는 의도된 동작이나, 환자안전 강제 기능이므로 Epic 5 감사 리포트에서 archive(soft-complete: completed_stage 컬럼 등으로 보존) 설계 검토. (backend/app/main.py advance_stage)
+- 비표준 current_stage·항목세트 변경 대비 부족: ①current_stage가 STAGE_ORDER 밖(빈 값/오타/미래 단계 "퇴원" 등)이면 next_stage가 None을 반환해 advance가 "마지막 단계입니다"(400)로 오인 표시되고 프론트도 "최종 단계입니다"로 표기 — 둘은 구분돼야 함. 현재는 current_stage가 항상 표준값(시드)이고 단계 편집 기능이 없어 미발생(latent). ②CHECKLIST_ITEMS에 항목을 추가하면 진행 중이던 환자의 all_checked가 조용히 false로 바뀜(체크리스트 세트 버전닝 없음). 단계 편집/항목 편집(Epic 5) 도입 시 함께 처리. (backend/app/main.py next_stage·advance_stage, frontend/src/components/ProcedureChecklist.tsx)

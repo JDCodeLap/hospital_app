@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 /c/Users/moond/Projects/hospital-app/_bmad/scripts/resolve_customization.py --skill \"/c/Users/moond/Projects/hospital-app/.claude/skills/bmad-prd\" --key workflow)"
+    ]
+  }
+}

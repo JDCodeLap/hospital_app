@@ -1,0 +1,207 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+/* Pretendard 글꼴은 src/app/layout.tsx의 <link>로 불러옵니다.
+   (Tailwind가 @import "tailwindcss"를 펼치면서 url @import가 뒤로 밀려
+    브라우저가 무시하는 문제가 있어 <link> 방식을 사용) */
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn 의미색 → Tailwind 토큰 매핑 (shadcn 컴포넌트가 사용. 그대로 유지) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* =========================================================================
+   병원 통합 안전 관리 앱 — DESIGN.md 디자인 토큰 (Story 1.1)
+   여기 색은 bg-bg-base, text-text-primary, bg-accent-primary, text-danger 등
+   전용 유틸리티 클래스로 화면 어디서나 사용합니다.
+   ========================================================================= */
+@theme {
+  /* 배경 (흰색/연회색) — MedCore 참고 Material 3 라이트 팔레트 */
+  --color-bg-base: #f7f9fb; /* 페이지 바탕 */
+  --color-bg-surface: #ffffff; /* 카드/패널(흰색) */
+  --color-bg-elevated: #eceef0; /* 칩·입력칸·호버(옅은 회색) */
+  --color-border-subtle: #c2c6d8; /* 옅은 경계선(outline-variant) */
+
+  /* 글자 */
+  --color-text-primary: #191c1e; /* 주요 글자(on-surface) */
+  --color-text-secondary: #424656; /* 보조 글자(on-surface-variant) */
+  --color-text-muted: #727687; /* 더 흐린 글자(outline) */
+
+  /* 포인트 (파랑) — 버튼/선택/링크에만 */
+  --color-accent-primary: #0050cb; /* primary */
+  --color-accent-hover: #0043ac;
+  --color-accent-on: #ffffff; /* 포인트색 위 글자(흰색) */
+
+  /* 상태색 — 알림에만 사용(장식 금지). 흰 배경에서 잘 읽히는 톤 */
+  --color-danger: #ba1a1a; /* 위험/경고(빨강·error) */
+  --color-danger-bg: #ffdad6; /* 경고 배경(error-container) */
+  --color-warning: #d97706; /* 주의(앰버) */
+  --color-success: #16a34a; /* 완료/정상(초록) */
+  --color-info: #005f89; /* 정보(tertiary) */
+
+  /* 글꼴 (한글=Pretendard, 영문/숫자=Inter 보조 — MedCore 참고) */
+  --font-sans:
+    "Pretendard Variable", "Pretendard", "Inter", "Malgun Gothic",
+    -apple-system, sans-serif;
+
+  /* 글자 크기 */
+  --text-display: 28px;
+  --text-title: 20px;
+  --text-body: 15px;
+  --text-small: 13px;
+  --text-caption: 12px;
+
+  /* 둥근 모서리 (MedCore 참고 — 살짝 덜 둥글게, 카드 느낌) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* 여백: Tailwind v4의 기본 숫자 척도(p-2, gap-6 = 4의 배수)를 그대로 사용한다.
+     (참고) DESIGN.md 여백 단계 → 숫자 척도 대응: xs=1, sm=2, md=4, lg=6, xl=8
+     v4에서는 --spacing-md 같은 명명 토큰이 p-md 유틸리티를 만들지 않으므로 두지 않음. */
+}
+
+/* 라이트(흰색 미니멀) 기본 테마 — shadcn 의미색을 우리 팔레트(파랑 포인트)에 맞춤.
+   이 덕분에 shadcn Button(bg-primary)이 파란 포인트가 되고 테두리/입력칸이 옅은 회색이 됨. */
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --primary: #0050cb; /* accent.primary (파랑) */
+  --primary-foreground: #ffffff; /* accent.on */
+  --secondary: #eceef0;
+  --secondary-foreground: #191c1e;
+  --muted: #eceef0;
+  --muted-foreground: #424656; /* text.secondary */
+  --accent: #eceef0; /* 옅은 회색 채움(호버 등) */
+  --accent-foreground: #191c1e;
+  --destructive: #ba1a1a; /* danger */
+  --border: #c2c6d8; /* border.subtle */
+  --input: #c2c6d8;
+  --ring: #0050cb; /* accent.primary */
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  /* 둥근 모서리 기준값(shadcn). MedCore 참고로 10px 정도 — 카드 느낌 */
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+/* 다크 모드(기본) — shadcn 의미색을 DESIGN.md 팔레트로 매핑.
+   이 덕분에 shadcn Button(bg-primary)이 자동으로 하늘색 포인트가 됩니다. */
+.dark {
+  --background: #0f172a; /* bg.base */
+  --foreground: #f1f5f9; /* text.primary */
+  --card: #1e293b; /* bg.surface */
+  --card-foreground: #f1f5f9;
+  --popover: #1e293b;
+  --popover-foreground: #f1f5f9;
+  --primary: #38bdf8; /* accent.primary (하늘색) */
+  --primary-foreground: #0f172a; /* accent.on */
+  --secondary: #334155;
+  --secondary-foreground: #f1f5f9;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8; /* text.secondary */
+  --accent: #334155; /* bg.elevated */
+  --accent-foreground: #f1f5f9;
+  --destructive: #f87171; /* danger */
+  --border: #334155; /* border.subtle */
+  --input: #334155;
+  --ring: #38bdf8; /* accent.primary */
+  --chart-1: #38bdf8;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #f87171;
+  --chart-5: #94a3b8;
+  --sidebar: #1e293b;
+  --sidebar-foreground: #f1f5f9;
+  --sidebar-primary: #38bdf8;
+  --sidebar-primary-foreground: #0f172a;
+  --sidebar-accent: #334155;
+  --sidebar-accent-foreground: #f1f5f9;
+  --sidebar-border: #334155;
+  --sidebar-ring: #38bdf8;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Material Symbols(아이콘 글꼴) 기본값 — <span class="material-symbols-outlined">이름</span> */
+.material-symbols-outlined {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 400,
+    "GRAD" 0,
+    "opsz" 24;
+  line-height: 1;
+  vertical-align: middle;
+  user-select: none;
+}
+.material-symbols-outlined.fill {
+  font-variation-settings:
+    "FILL" 1,
+    "wght" 400,
+    "GRAD" 0,
+    "opsz" 24;
+}

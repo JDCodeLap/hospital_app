@@ -1,0 +1,480 @@
+"use client";
+
+// 환자 통합 화면 본문: 환자 한 명의 모든 정보(기본정보·방문·진단·투약·검사·수납)를
+// 한 화면에 카드형으로 모아 보여준다(읽기 전용). UX 목업(patient-screen.html)의 다크 레이아웃을 따른다.
+// - 데이터는 기존 GET /api/patients/{id}(2.1, 보호됨)를 그대로 사용 → 백엔드 변경 없음
+// - AuthGuard 통과 후 여기(클라이언트)에서 토큰 달아 호출(미인증 노출 방지, 1.4 가이드)
+// - 알레르기 배너는 '정적 표시'만(확인-유지/닫기는 Story 3.2 범위)
+// ※ 단계 타임라인 그래픽=4.1, 체크리스트=3.4, 투약알림=3.3, 약물충돌=3.1, 실시간 갱신=2.4 (범위 밖)
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+
+import { API_BASE, WS_BASE } from "@/lib/api";
+import { authHeader, clearToken, getToken } from "@/lib/auth";
+import { PrescribeForm } from "@/components/PrescribeForm";
+import { SafetyBanner } from "@/components/SafetyBanner";
+import { ProcedureChecklist, type Checklist } from "@/components/ProcedureChecklist";
+import { Icon } from "@/components/Icon";
+
+// GET /api/patients/{id} 응답 묶음의 모양(필요한 필드만)
+type PatientBundle = {
+  patient: {
+    id: number;
+    registration_number: string;
+    name: string;
+    age: number;
+    birth_date: string;
+    gender: string;
+    allergies: string;
+    current_stage: string;
+  };
+  visits: { visited_at: string; department: string; reason: string }[];
+  diagnoses: { name: string; diagnosed_at: string; status: string }[];
+  medications: { drug_name: string; dose: string; schedule: string; status: string }[];
+  lab_results: {
+    test_name: string;
+    value: string;
+    unit: string;
+    flag: string;
+    measured_at: string;
+  }[];
+  billings: { item: string; amount: number; status: string }[];
+  // 안전 경고 확인 상태(3.2): 미확인이면 null
+  safety_ack: {
+    acknowledged_by: number;
+    acknowledged_by_name: string;
+    acknowledged_at: string;
+  } | null;
+  // 필수 절차 체크리스트(3.4): 항목·전체체크여부·다음단계
+  checklist?: Checklist;
+};
+
+// 화면 상태: 불러오는 중 / 정상 / 없는 환자(404) / 오류
+type Phase = "loading" | "ok" | "notfound" | "error";
+
+// 성별 코드 → 한국어 표시
+function genderLabel(g: string): string {
+  if (g === "M") return "남";
+  if (g === "F") return "여";
+  return g || "기타";
+}
+
+// ISO 날짜/일시 → 한국어 표기(잘못된 값이면 원본 그대로 안전 반환)
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleDateString("ko-KR");
+}
+function fmtDateTime(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString("ko-KR", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
+export function PatientDetail() {
+  const router = useRouter();
+  const { id } = useParams<{ id: string }>();
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [bundle, setBundle] = useState<PatientBundle | null>(null);
+
+  // 환자 묶음을 불러오는 함수. 초기 로딩과 실시간 갱신(WS) 양쪽에서 재사용.
+  // silent=true(실시간 갱신)면 스켈레톤/오류 표시 없이 조용히 데이터만 교체
+  // (갱신 실패 시 기존 화면 유지). 초기 로딩은 silent=false로 로딩/오류 상태를 보여줌.
+  const loadBundle = useCallback(
+    async (signal: AbortSignal | undefined, silent: boolean) => {
+      const pid = Array.isArray(id) ? id[0] : id;
+      if (!pid) return; // 첫 렌더 등 id 미확정 → 스킵
+      if (!/^\d+$/.test(pid)) {
+        setPhase("notfound"); // 숫자 아닌 id(예: /patients/abc)
+        return;
+      }
+      if (!silent) setPhase("loading");
+      try {
+        const res = await fetch(`${API_BASE}/api/patients/${pid}`, {
+          headers: { ...authHeader() },
+          signal,
+        });
+        if (signal?.aborted) return;
+        if (res.status === 401 || res.status === 403) {
+          // 세션 만료/무효 → 토큰 비우고 로그인 화면으로(AuthGuard와 동일 정책).
+          // 단, 백그라운드(silent) 갱신 중엔 타인 동작으로 갑자기 튕기지 않게 화면 유지
+          // (다음 사용자 동작이나 AuthGuard 재검증이 처리).
+          if (!silent) {
+            clearToken();
+            router.replace("/login");
+          }
+          return;
+        }
+        if (res.status === 404 || res.status === 422) {
+          // 404=없는 환자, 422=잘못된 id 형식 → "환자를 찾을 수 없습니다"로.
+          // silent 갱신 중엔 현재 화면 유지(타인 동작에 의해 갑자기 사라지지 않게).
+          if (!silent) setPhase("notfound");
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: PatientBundle = await res.json();
+        if (signal?.aborted) return;
+        setBundle(data);
+        setPhase("ok");
+      } catch (err: unknown) {
+        if (signal?.aborted) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (!silent) setPhase("error"); // 실시간 갱신 실패는 화면 유지(조용히)
+      }
+    },
+    [id, router],
+  );
+
+  // 초기 로딩(및 id 변경 시 재로딩) — 2.3 동작 그대로
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      await loadBundle(controller.signal, false);
+    })();
+    return () => controller.abort();
+  }, [loadBundle]);
+
+  // 실시간 구독(WebSocket): 이 환자가 바뀌면 '다시 불러와' 신호를 받아 조용히 갱신.
+  // WS는 보조 채널 — 실패/끊김은 콘솔만, 화면 오류로 표시하지 않음(초기 fetch로 이미 정상).
+  useEffect(() => {
+    const pid = Array.isArray(id) ? id[0] : id;
+    if (!pid || !/^\d+$/.test(pid) || !getToken()) return;
+
+    let closedByUs = false;
+    let retry = 0;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const open = () => {
+      if (closedByUs) return; // 이미 화면을 떠났으면 새로 열지 않음
+      const token = getToken(); // 재연결 때마다 최신 토큰을 다시 읽음(만료/재로그인 대응)
+      if (!token) return;
+      ws = new WebSocket(
+        `${WS_BASE}/ws/patients/${pid}?token=${encodeURIComponent(token)}`,
+      );
+      ws.onopen = () => {
+        retry = 0; // 연결 성공 시 재시도 횟수 초기화(오래 켠 화면도 계속 회복)
+      };
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg?.type === "patient_updated") {
+            // 신호만 받았으니 보호된 GET으로 최신 데이터를 조용히 다시 불러옴
+            loadBundle(undefined, true);
+          }
+        } catch {
+          // 형식이 이상한 메시지는 무시
+        }
+      };
+      ws.onclose = () => {
+        // 우리가 닫은 게 아니면 몇 초 후 최대 2회 재연결 시도
+        if (!closedByUs && retry < 2) {
+          retry += 1;
+          reconnectTimer = setTimeout(open, 3000);
+        }
+      };
+    };
+    open();
+
+    return () => {
+      closedByUs = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer); // 예약된 재연결 취소(좀비 연결 방지)
+      ws?.close();
+    };
+  }, [id, loadBundle]);
+
+  return (
+    <>
+      {/* 뒤로가기(환자 검색) */}
+      <Link
+        href="/patients"
+        className="mb-4 inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary"
+      >
+        <Icon name="arrow_back" className="text-base" />
+        환자 검색
+      </Link>
+
+      <div className="flex flex-col gap-4">
+        {phase === "loading" && <DetailSkeleton />}
+
+        {phase === "notfound" && (
+          <EmptyState
+            title="환자를 찾을 수 없습니다"
+            desc="존재하지 않거나 삭제된 환자입니다."
+          />
+        )}
+
+        {phase === "error" && (
+          <EmptyState
+            title="정보를 불러올 수 없습니다"
+            desc="백엔드 서버(http://localhost:8000)가 켜져 있는지 확인하세요."
+            danger
+          />
+        )}
+
+        {phase === "ok" && bundle?.patient && (
+          <DetailContent
+            bundle={bundle}
+            onSaved={() => loadBundle(undefined, true)}
+          />
+        )}
+        {phase === "ok" && bundle && !bundle.patient && (
+          <EmptyState
+            title="정보를 표시할 수 없습니다"
+            desc="환자 정보 형식이 올바르지 않습니다."
+            danger
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── 정상 본문 ───────────────────────────────────────────────
+function DetailContent({
+  bundle,
+  onSaved,
+}: {
+  bundle: PatientBundle;
+  onSaved: () => void;
+}) {
+  const p = bundle.patient;
+  const allergies = (p.allergies ?? "").trim();
+  // 목록 키가 누락/null이어도 render 중 크래시하지 않도록 빈 배열로 방어
+  const visits = bundle.visits ?? [];
+  const diagnoses = bundle.diagnoses ?? [];
+  const medications = bundle.medications ?? [];
+  const labResults = bundle.lab_results ?? [];
+  const billings = bundle.billings ?? [];
+
+  return (
+    <>
+      {/* 안전 경고 배너(Story 3.2): 미확인=빨간 경고+확인 버튼 / 확인됨=차분 배너.
+          담당자가 "확인"하기 전까지 유지(백엔드 SafetyAck에 기록되어 전 직원 공유). */}
+      <SafetyBanner
+        patientId={p.id}
+        allergies={allergies}
+        safetyAck={bundle.safety_ack}
+        onSaved={onSaved}
+      />
+
+      {/* 환자 헤더 카드 (아바타 + 기본정보 + 현재 단계) */}
+      <div className="flex items-center gap-4 rounded-xl border border-border-subtle bg-bg-surface p-5">
+        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-accent-primary/10 text-xl font-bold text-accent-primary">
+          {p.name.slice(0, 1)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-xl font-bold text-text-primary">{p.name}</span>
+            <span className="text-sm text-text-secondary">
+              {p.age}세 · {genderLabel(p.gender)}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center gap-1 font-mono text-sm text-text-secondary">
+            <Icon name="badge" className="text-base" />
+            {p.registration_number}
+          </div>
+        </div>
+        {/* 현재 단계: 타임라인 그래픽(4.1) 대신 텍스트 배지만 */}
+        <span className="shrink-0 rounded-full bg-accent-primary/10 px-3 py-1 text-caption font-semibold text-accent-primary">
+          {p.current_stage}
+        </span>
+      </div>
+
+      {/* 필수 절차 체크리스트(Story 3.4) — 전부 체크해야 "다음 단계로" 활성화 */}
+      <ProcedureChecklist
+        patientId={p.id}
+        checklist={bundle.checklist}
+        onSaved={onSaved}
+      />
+
+      {/* 방문기록 */}
+      <InfoCard title="방문기록" icon="event">
+        {visits.length === 0 ? (
+          <EmptyRow />
+        ) : (
+          visits.map((v, i) => (
+            <Row
+              key={i}
+              k={`${fmtDateTime(v.visited_at)} · ${v.department}`}
+              v={v.reason || "—"}
+            />
+          ))
+        )}
+      </InfoCard>
+
+      {/* 진단 */}
+      <InfoCard title="진단" icon="clinical_notes">
+        {diagnoses.length === 0 ? (
+          <EmptyRow />
+        ) : (
+          diagnoses.map((d, i) => (
+            <Row
+              key={i}
+              k={d.name}
+              v={`${fmtDate(d.diagnosed_at)}${d.status === "resolved" ? " · 해결" : ""}`}
+            />
+          ))
+        )}
+      </InfoCard>
+
+      {/* 투약 */}
+      <InfoCard title="투약" icon="medication">
+        {medications.length === 0 ? (
+          <EmptyRow />
+        ) : (
+          medications.map((m, i) => (
+            <Row
+              key={i}
+              k={`${m.drug_name}${m.dose ? ` ${m.dose}` : ""}`}
+              v={m.schedule || "—"}
+            />
+          ))
+        )}
+      </InfoCard>
+
+      {/* 처방 입력 (Story 3.1) — 알레르기/금기 충돌 시 경고 팝업 */}
+      <PrescribeForm patientId={p.id} onSaved={onSaved} />
+
+      {/* 검사결과 */}
+      <InfoCard title="검사결과" icon="science">
+        {labResults.length === 0 ? (
+          <EmptyRow />
+        ) : (
+          labResults.map((l, i) => (
+            <div
+              key={i}
+              className="flex items-center justify-between gap-3 py-1.5 text-sm"
+            >
+              <span className="text-text-secondary">
+                {fmtDate(l.measured_at)} · {l.test_name}
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="font-semibold text-text-primary">
+                  {l.value}
+                  {l.unit ? ` ${l.unit}` : ""}
+                </span>
+                {l.flag === "abnormal" && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-caption font-medium text-warning">
+                    <Icon name="warning" className="text-sm" />
+                    <span>이상</span>
+                  </span>
+                )}
+              </span>
+            </div>
+          ))
+        )}
+      </InfoCard>
+
+      {/* 수납 */}
+      <InfoCard title="수납" icon="receipt_long">
+        {billings.length === 0 ? (
+          <EmptyRow />
+        ) : (
+          billings.map((b, i) => (
+            <div
+              key={i}
+              className="flex items-center justify-between gap-3 py-1.5 text-sm"
+            >
+              <span className="text-text-secondary">{b.item}</span>
+              <span className="flex items-center gap-2">
+                <span className="font-mono font-semibold text-text-primary">
+                  {(b.amount ?? 0).toLocaleString("ko-KR")}원
+                </span>
+                {b.status === "paid" ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-caption font-medium text-success">
+                    <Icon name="check_circle" className="text-sm" />
+                    <span>완료</span>
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-caption font-medium text-text-secondary">
+                    미납
+                  </span>
+                )}
+              </span>
+            </div>
+          ))
+        )}
+      </InfoCard>
+    </>
+  );
+}
+
+// ── 공통 작은 부품들 ─────────────────────────────────────────
+function InfoCard({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border-subtle bg-bg-surface p-5">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-text-primary">
+        <Icon name={icon} className="text-lg text-accent-primary" />
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5 text-sm">
+      <span className="text-text-secondary">{k}</span>
+      <span className="text-right font-semibold text-text-primary">{v}</span>
+    </div>
+  );
+}
+
+function EmptyRow() {
+  return <p className="py-1 text-sm text-text-muted">기록 없음</p>;
+}
+
+function EmptyState({
+  title,
+  desc,
+  danger,
+}: {
+  title: string;
+  desc: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border-subtle bg-bg-surface p-6 text-center">
+      <p className={`font-bold ${danger ? "text-danger" : "text-text-primary"}`}>
+        {title}
+      </p>
+      <p className="mt-1 text-sm text-text-secondary">{desc}</p>
+      <Link
+        href="/patients"
+        className="mt-4 inline-flex h-11 items-center rounded-lg bg-bg-elevated px-4 text-sm text-text-primary hover:bg-border-subtle"
+      >
+        ← 환자 검색으로
+      </Link>
+    </div>
+  );
+}
+
+// 불러오는 중 자리표시(스켈레톤) — 회색 박스 몇 개
+function DetailSkeleton() {
+  return (
+    <div className="flex flex-col gap-3" aria-busy="true" aria-live="polite">
+      <span className="sr-only">불러오는 중…</span>
+      <div className="h-16 animate-pulse rounded-lg bg-bg-elevated" />
+      <div className="h-24 animate-pulse rounded-lg bg-bg-elevated" />
+      <div className="h-24 animate-pulse rounded-lg bg-bg-elevated" />
+    </div>
+  );
+}
