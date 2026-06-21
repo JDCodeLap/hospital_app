@@ -93,3 +93,18 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return staff
+
+
+def get_current_admin(current: Staff = Depends(get_current_user)) -> Staff:
+    """관리자 전용 보호(Story 5.1, NFR2). 로그인했어도 admin이 아니면 403으로 거부.
+
+    프론트의 메뉴 숨김·AdminGuard는 UX 보조일 뿐, 진짜 자물쇠는 여기(백엔드)다 —
+    일반 직원이 화면/토큰을 조작해 관리자 API를 직접 호출해도 막힌다.
+    권한은 admin/staff 2단계만(세분화 권한은 Story 5.3).
+    """
+    if current.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다",
+        )
+    return current

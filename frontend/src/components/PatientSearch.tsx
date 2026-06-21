@@ -15,6 +15,7 @@ import { authHeader, clearToken } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
 
 // 목록 응답 한 건의 모양(백엔드 list_patients 요약 + allergies)
+// waiting_minutes·is_overdue는 4.4에서 추가된 선택 필드(하위호환 — 옛 응답엔 없을 수 있음)
 export type PatientSummary = {
   id: number;
   registration_number: string;
@@ -23,6 +24,8 @@ export type PatientSummary = {
   gender: string;
   current_stage: string;
   allergies: string;
+  waiting_minutes?: number | null;
+  is_overdue?: boolean;
 };
 
 // 검색어가 바뀐 뒤 실제 요청까지 기다리는 시간(ms)
@@ -134,18 +137,35 @@ export function PatientSearch() {
 }
 
 // 환자 카드 한 장. 누르면 통합 화면(/patients/{id}, Story 2.3에서 생성)으로 이동.
-function PatientCard({ patient }: { patient: PatientSummary }) {
+// hideStage=true면 현재 단계 배지를 숨긴다(흐름판은 그룹 자체가 단계라 중복, Story 4.3).
+// overdue=true면 대기 초과 강조(앰버 테두리/배경 + "대기 초과" 배지, Story 4.4). 검색 화면은 미전달=기본 false.
+export function PatientCard({
+  patient,
+  hideStage = false,
+  overdue = false,
+}: {
+  patient: PatientSummary;
+  hideStage?: boolean;
+  overdue?: boolean;
+}) {
   // 알레르기는 콤마로 구분된 문자열 → 비어 있지 않으면 위험 배지를 보여준다.
   // (백엔드가 혹시 null을 주더라도 안전하게 빈 문자열로 처리)
   const allergies = patient.allergies ?? "";
   const hasAllergy = allergies.trim().length > 0;
+  const waiting = patient.waiting_minutes;
 
   return (
     <Link
       href={`/patients/${patient.id}`}
       // 대상 페이지(2.3)가 아직 없으므로 자동 미리불러오기(prefetch) 끔 → 불필요한 404 요청 방지
       prefetch={false}
-      className="flex items-center gap-3 rounded-xl border border-border-subtle bg-bg-surface p-4 transition-all hover:border-accent-primary hover:shadow-sm focus-visible:border-accent-primary focus-visible:outline-none"
+      className={
+        "flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-sm focus-visible:outline-none " +
+        (overdue
+          ? // 대기 초과: 앰버 테두리 + 옅은 앰버 배경(색만이 아니라 아래 배지로도 표시)
+            "border-warning/50 bg-warning/10 hover:border-warning focus-visible:border-warning"
+          : "border-border-subtle bg-bg-surface hover:border-accent-primary focus-visible:border-accent-primary")
+      }
     >
       {/* 아바타(이름 첫 글자) */}
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-primary/10 font-bold text-accent-primary">
@@ -153,13 +173,22 @@ function PatientCard({ patient }: { patient: PatientSummary }) {
       </span>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="font-bold text-text-primary">{patient.name}</span>
           {/* 색만으로 정보 전달 금지(UX-DR8): 아이콘 + 글자 함께 */}
           {hasAllergy && (
             <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-caption font-medium text-danger">
               <Icon name="warning" className="text-sm" />
               <span>알레르기</span>
+            </span>
+          )}
+          {/* 대기 초과 배지(4.4): 색만이 아니라 아이콘+글자(N분 대기 / 대기 초과) */}
+          {overdue && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-warning/20 px-2 py-0.5 text-caption font-medium text-warning">
+              <Icon name="schedule" className="text-sm" />
+              <span>
+                {typeof waiting === "number" ? `${waiting}분 대기` : "대기 초과"}
+              </span>
             </span>
           )}
         </div>
@@ -172,10 +201,12 @@ function PatientCard({ patient }: { patient: PatientSummary }) {
         </p>
       </div>
 
-      {/* 현재 단계 배지 + 화살표 */}
-      <span className="shrink-0 rounded-full bg-bg-elevated px-3 py-1 text-caption text-text-secondary">
-        {patient.current_stage}
-      </span>
+      {/* 현재 단계 배지 + 화살표 (흐름판에선 단계가 그룹과 중복이라 hideStage로 숨김) */}
+      {!hideStage && (
+        <span className="shrink-0 rounded-full bg-bg-elevated px-3 py-1 text-caption text-text-secondary">
+          {patient.current_stage}
+        </span>
+      )}
       <Icon name="chevron_right" className="shrink-0 text-text-muted" />
     </Link>
   );

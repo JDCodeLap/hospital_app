@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-20
-last_updated: 2026-06-20 # Story 3.4 코드 리뷰 완료(done) → Epic 3 전체 완료
+last_updated: 2026-06-21 # Story 5.2 개발 완료 → review
 project: hospital-app
 project_key: NOKEY
 tracking_system: file-system
@@ -67,17 +67,17 @@ development_status:
   epic-3-retrospective: optional
 
   # ===== Epic 4: 부서 협업 + 환자 흐름 추적 =====
-  epic-4: backlog
-  4-1-환자-단계-타임라인: backlog
-  4-2-부서-간-자동-전달: backlog
-  4-3-환자-흐름판-전체-현황: backlog
-  4-4-대기-초과-알림: backlog
+  epic-4: done
+  4-1-환자-단계-타임라인: done
+  4-2-부서-간-자동-전달: done
+  4-3-환자-흐름판-전체-현황: done
+  4-4-대기-초과-알림: done
   epic-4-retrospective: optional
 
   # ===== Epic 5: 관리자 페이지 =====
-  epic-5: backlog
-  5-1-관리자-역할-전용-진입: backlog
-  5-2-직원-계정-관리: backlog
+  epic-5: in-progress
+  5-1-관리자-역할-전용-진입: done
+  5-2-직원-계정-관리: review
   5-3-권한-설정: backlog
   5-4-전체-현황-대시보드: backlog
   5-5-기준값-설정: backlog

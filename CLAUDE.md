@@ -66,13 +66,176 @@
   - [x] **Epic 1: 앱 토대 + 로그인** ✅ 완료 (2026-06-20)
   - [x] **Epic 2: 환자 정보 한눈에 보기** ✅ 완료 (2026-06-20) — 데이터·검색·통합화면·실시간
   - [x] **Epic 3: 환자 안전 지키기** ✅ 완료 (2026-06-20) — 알레르기경고·배너유지·투약알림·필수절차체크리스트
-  - [ ] **Epic 4: 부서 협업 + 환자 흐름 추적** ◀ 다음 시작점 (Story 4.1 환자 단계 타임라인)
-  - [ ] Epic 5: 관리자 페이지
+  - [x] **Epic 4: 부서 협업 + 환자 흐름 추적** ✅ 완료 (2026-06-21) — 단계타임라인·인계메모·환자흐름판·대기초과알림
+  - [ ] **Epic 5: 관리자 페이지** ◀ 진행 중 (5.1 관리자 진입 ✅ done → 다음 5.2 직원 계정 관리)
   - [ ] Epic 6: 모바일 앱 패키징
 
 ---
 
 ## 📝 작업 기록 (최신순)
+
+### 2026-06-21 — 🔧 사용자 요청 보완: 처방·인계메모 "수정·삭제" 추가 ✏️ (5.2 리뷰 대기 중 끼어든 작업)
+- 계기: 사용자가 "처방·인계메모를 잘못 추가하면 못 고친다"고 지적 → 확인 결과 사실(추가만 있고 수정/삭제 통로가 없었음). 사용자 선택 = **"수정·삭제 둘 다 추가"**
+- 🗄️ 백엔드(`main.py`): `PATCH·DELETE /api/patients/{id}/medications/{medId}` + `PATCH·DELETE /api/patients/{id}/handover-note/{noteId}` (전부 `get_current_user` 보호, 저장 후 `manager.broadcast`로 실시간 갱신)
+  - **처방 수정 시 약 이름 바꾸면 알레르기/금기 재검사**(추가와 동일한 409 흐름 — 위험 약으로 고치려 하면 확인 전 저장 거부) / **처방 삭제는 투약완료 기록 있으면 409 보호**(FK IntegrityError→친절 안내) / 인계메모 수정은 빈값·길이상한 검증(작성과 동일), 내용만 바꾸고 from_stage·작성자·시각 보존
+- 🖥️ 프론트: `MedicationList.tsx`(NEW: 투약 항목마다 수정/삭제 버튼, 삭제는 confirm+409 안내) + `PrescribeForm.tsx`(UPDATE: `editing` prop으로 **수정 모드 겸용** — 부모가 key로 리마운트해 입력칸 프리필, PATCH 전환, 알레르기 팝업 재사용) + `PatientDetail.tsx`(UPDATE: `editingMed` 상태로 둘 연결, 투약 타입에 id 추가) + `HandoverNoteSection.tsx`(UPDATE: 메모마다 인라인 수정 textarea + 삭제 confirm)
+- ★ 핵심 판단: 처방 수정도 **안전검사 유지**(약 바꾸면 재검사) / 처방 삭제는 **이미 준 약 보호**(완료 기록 있으면 못 지움) / 처방 수정 UI는 PrescribeForm **재사용**(알레르기 경고 흐름 중복 0)
+- ⚠️ **설계 변경 주의**: 인계메모는 4.2에서 **일부러 append-only(수정·삭제 금지, 감사 추적)**로 만들었던 것을 **사용자 요청으로 수정·삭제 허용으로 바꿈** → 누가 메모를 고치거나 지운 이력이 안 남음. `deferred-work.md`에 기록(운영 시 감사 로그/정정-기록 방식 재검토 권고)
+- 검증: 백엔드 **18시나리오 전부 PASS**(처방 추가·수정·위험약 수정 409·확인 후 허용·빈약 422·없는약 404·미인증 401·삭제·FK보호 409 / 인계메모 수정·반영·빈값 422·없는메모 404·삭제·재삭제 404) + build·lint(오류 0). 테스트 잔여 데이터 정리 완료
+- ★ 이건 정식 스토리 밖의 보완 작업(5.2는 여전히 review). 코드 리뷰 시 5.2와 함께 보거나 별도 정리 가능
+
+### 2026-06-21 — 🛠️ Story 5.2 개발 완료! (직원 계정 관리) → review 👥
+- 🗄️ 백엔드: `Staff.job_title` 컬럼 추가(**권한 role / 직군 job_title 분리** — 5.1 인계 핵심) + `lifespan`에 **멱등 `ALTER TABLE staff ADD COLUMN IF NOT EXISTS`**(첫 "기존 테이블 변경", create_all ALTER 한계 우회) + 시드 직군 백필(nurse1=간호사·admin1=원무과, 빈 값일 때만) + 상수/헬퍼(`VALID_ROLES`·`JOB_TITLES`·`normalize_role`=5.1 deferred 이행·`staff_public`=해시 미노출·`assert_not_last_admin`=self-lockout 방지) + `StaffCreateIn`/`StaffUpdateIn` + **`/api/admin/staff` GET·POST·PATCH·DELETE**(전부 `get_current_admin` 보호)
+- 🖥️ 프론트: `StaffManagement.tsx`(NEW: 목록+권한/직군 배지·등록/수정 폼(권한·직군 select, 비번 "비워두면 변경 안 함")·삭제 confirm·인라인 오류는 **백엔드 detail 그대로 표시**·busyRef 이중제출 방지·401/403→로그아웃) + `admin/staff/page.tsx`(NEW: `<AdminGuard><AppShell>`, RSC 프리렌더 금지) + `AdminOverview.tsx`(UPDATE: 직원관리 카드를 활성 링크 `/admin/staff`로, 나머지 3개 준비 중 유지)
+- ★ 핵심 판단: **권한(admin/staff)·직군(의사/간호사/원무과/기타) 분리**(role에 직군 섞으면 게이트 붕괴) / **멱등 DDL로 기존 테이블 변경**(Alembic은 계속 deferred=데모 규모) / **마지막 관리자 보호 3종**(강등·삭제·비활성화 시 활성 admin ≤1이면 409) + **자기 삭제 금지**(서버 강제, 프론트 보조) / **role 정규화**(`strip().lower()`, 메뉴·게이트 일치) / **비번 빈값이면 유지**(빈 해시 덮어쓰기 방지) / **삭제 FK IntegrityError→409 친절 안내**(비활성화 경로) / **해시 절대 미노출**(`staff_public` 단일 직렬화)
+- ★ 막힌 점: 작업 디렉터리 헷갈림→절대경로 / lint `set-state-in-effect`→effect를 async 콜백 래핑(2.4/4.3 패턴) / 콘솔 한글 깨짐→UTF-8 urllib 스크립트로 JSON 값 확인
+- 검증: 백엔드 **25시나리오 전부 PASS**(보호403/401·등록·정규화·중복409·입력422·수정·비번정책·마지막관리자 409 3종·자기삭제409·FK보호409·기록없는삭제·회귀) + 8002 재시작 멱등(오류 0·직원 2명) + build(/admin/staff 정적)·lint(오류 0) **PASS**. 시드 admin1/admin1234·nurse1/test1234
+- **다음 할 일:** 🔍 `bmad-code-review`(권장, 권한/계정 민감) → 통과 시 Story 5.3(권한 설정, FR12)
+
+### 2026-06-21 — 📝 Story 5.2 작성 완료 (ready-for-dev) — 직원 계정 관리 👥 (FR11)
+- `bmad-create-story`로 **Story 5.2 (직원 계정 관리, FR11)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/5-2-직원-계정-관리.md`
+- 범위: `/admin` 위에 **직원 CRUD** — ①백엔드 — `Staff.job_title` 컬럼 추가(**멱등 `ADD COLUMN IF NOT EXISTS`** = 첫 "기존 테이블 변경", create_all ALTER 한계 우회) + 상수/헬퍼(`VALID_ROLES`·`JOB_TITLES`·`normalize_role`·`staff_public`(해시 미노출)·`assert_not_last_admin`) + `StaffCreateIn`/`StaffUpdateIn` + `/api/admin/staff` **GET·POST·PATCH·DELETE**(전부 `get_current_admin` 보호) ②프론트 — `/admin/staff` 라우트 + `StaffManagement.tsx`(NEW: 목록·등록·수정·삭제·확인창·인라인오류) + `AdminOverview` 첫 카드를 활성 링크로
+- ★ 핵심 판단: **권한(role: admin/staff)과 직군(job_title: 의사/간호사/원무과/기타) 분리**(5.1 인계 핵심 — role에 직군 섞으면 게이트 붕괴) / **마지막 관리자 보호**(강등·삭제·비활성화 시 활성 admin ≤1이면 409 = self-lockout 방지) + **자기 삭제 금지** / **role 정규화**(`strip().lower()`+admin/staff만 = 5.1 deferred 이행, 메뉴·게이트 일치) / **비번 빈값이면 유지**(빈 해시 덮어쓰기 금지) / **삭제는 하드+FK IntegrityError→409 친절 안내**(비활성화 경로, `is_active`가 토큰 거부=soft delete) / 해시 절대 미노출(`staff_public` 단일 직렬화)
+- ★ 첫 기존 테이블 스키마 변경 — 그동안(3.2~4.4) 새 테이블 우회와 갈라짐(직군은 Staff 1:1 속성). **Alembic은 계속 deferred**(데모 규모, 멱등 DDL 1줄로 처리)
+- ★ 범위 밖: 정보 접근 범위 권한=5.3(FR12, 직군은 분류만·화면 제한 X) / 현황 대시보드=5.4 / 기준값=5.5 / 접근 감사로그·비번정책·셀프수정
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 5.2 개발
+
+### 2026-06-21 — 🔍 Story 5.1 코드 리뷰 완료 → done! 🔑 (관리자 역할 & 전용 진입)
+- ★ 상황: 이전 리뷰 세션이 **findings 기록 후 패치 적용·상태 갱신 전에 중단**(스토리에 patch 2건 `[ ]` 미적용 + sprint-status 여전히 review)된 것을 발견 → **처음부터 독립 재검증** 후 마무리
+- 검사관 3종 병렬(Blind Hunter·Edge Case Hunter·Acceptance Auditor) ✅ — **AC 1·2·3·5·6·7 PASS, 범위 침범 0건, 보안 자물쇠(백엔드 get_current_admin 403) 견고**. **셋 다 같은 단일 버그(AC4) 지목**
+- **patch 2건 즉시 적용**(둘 다 `AppShell.tsx`): ①**AC4 결함** — 폰 하단 탭바가 `NAV.map`(상수)을 써서 **모바일에서 관리자 메뉴 안 보임**(사이드 메뉴 `nav.map`은 정상) → `nav.map`으로 수정(line 118). 휴대폰이 주요 대상이라 합격기준 위반이었음 ②**role fetch에 AbortController+타임아웃 누락**(AuthGuard/AdminGuard는 보유) → `ME_TIMEOUT_MS=8000`+AbortController+finally clearTimeout 추가(패턴 일치)
+- 재검증: `npm run build`(타입체크·`/admin` 정적 생성)·`npm run lint`(오류 0, 폰트 경고 3건 기존) **PASS**
+- defer 4건 → `deferred-work.md`: ①**하드코딩 관리자 비번 `admin1234`**(배포 전 dev플래그 차단 필요, 관리자라 영향 범위↑) ②**role 자유문자열 정확매칭**(5.2 역할편집 때 normalize/enum) ③**admin1 시드 멀티워커 IntegrityError**(기존 seed race 계열) ④**(재검토 신규) `/api/admin/overview`가 전체 행 메모리 적재**(`len(select().all())` → `func.count()`로 정리, 데모 무해)
+- dismiss 7건 기각: 세션 중 권한변경 시에도 백엔드 403 차단 / AdminGuard 일시오류 시 /login(AuthGuard 동일 의도) / 중복 /me 호출(무해) / response_model 없음(dict 리터럴 반환=노출 없음) / status 미리셋(router 안정) 등
+- 상태: **5-1 = done**
+- ▶▶ **다음: Story 5.2 (직원 계정 관리, FR11)** → `bmad-create-story`
+  - 인계: `/admin` 아래 직원 CRUD(등록/수정/삭제+직군) + `get_current_admin` 보호 `/api/admin/staff` 엔드포인트군. **권한(role: admin/staff)과 직군(의사/간호사/원무과)을 섞지 말고 분리**(job_title 별도 컬럼) 결정 필요. 역할 편집 도입 시 위 defer②(role normalize)도 함께 처리. `hash_password` 재사용.
+
+### 2026-06-21 — 🔍 Story 4.1 코드 리뷰 완료 → done! 🗺️ (환자 단계 타임라인)
+- 검사관 3종 병렬(Blind Hunter·Edge Case Hunter·Acceptance Auditor) ✅ — **AC 1~8 전부 PASS, 범위 침범 없음, 읽기 전용 구현 확인**
+- **patch 0건** — Acceptance Auditor가 모든 AC 전부 통과로 판정. 수정해야 할 in-scope 버그 없음.
+- defer 5건 → `deferred-work.md`: ①**Error Boundary 없음**(StageTimeline 렌더 실패 시 단계 표시 소실 — 시스템 전반) ②**접근성 polish**(aria-current 위치+sr-only 텍스트 — AC 8 초과 개선) ③**WS+onSaved 이중 fetch 경합**(2.4 패턴, 깜빡임만) ④**낙관적 업데이트 없음**(pull 방식 한계) ⑤**advancingRef 락 타이밍**(3.4 기존 이슈)
+- dismiss 5건 기각: `#06281c`·`rgba(0,80,203,0.2)` 스펙 명시값 / `border-[#f7f9fb]` 스펙 권장 workaround / 알 수 없는 단계 폴백(AC 4 설계) / `top-[10px]` 1px 차이(스펙 코드 그대로)
+- 상태: **4-1 = done**
+- ▶▶ **다음: Story 4.2 (부서 간 자동 전달)** → `bmad-create-story`
+  - 인계: FR8 — 한 부서 입력이 다른 부서에 자동 전달. 2.4 `manager.broadcast` 실시간 파이프 재사용. 부서 노트/인계 메모 형태 구현 가능.
+
+### 2026-06-21 — 🛠️ Story 5.1 개발 완료! (관리자 역할 & 전용 진입) → review 🔑
+- 🗄️ 백엔드: `security.py`에 **`get_current_admin`**(get_current_user 의존, `role != "admin"`이면 **403** — 진짜 자물쇠) + `main.py`에 **멱등 admin1 시드**(username 존재 확인 후 없으면 생성, role=admin·admin1234 — 기존 "비었을 때만 nurse1" 분기와 별개 블록) + **`GET /api/admin/overview`**(get_current_admin 보호, 직원·환자 수 요약) + import. `Staff.role` 기존 재사용(모델 변경 0, 마이그레이션 0)
+- 🖥️ 프론트: `AdminGuard.tsx`(NEW: AuthGuard 본떠 토큰+/me 검증 + role==admin, 일반직원→`/` 차단, 무효토큰→clearToken+/login, 확인중 본문숨김) + `AdminOverview.tsx`(NEW: /api/admin/overview 호출→직원·환자수 카드 + 준비중 카드 4개=5.2~5.5 비활성) + `admin/page.tsx`(NEW: AdminGuard+AppShell, 서버컴포넌트는 껍데기=RSC 프리렌더 금지 1.4) + `AppShell.tsx`(UPDATE: /me로 role 읽어 admin이면 NAV에 "관리자" 메뉴 추가, 상수 NAV 보존, 실패시 숨김)
+- ★ 핵심 판단: **백엔드 게이트가 진짜 보안(403)**, 프론트 메뉴/가드는 UX 보조(3.1 철학) / **Staff.role 재사용**(admin/staff 2단계) / **멱등 시드**(재시작 staff_count=2 유지) / **role은 서버 /me에서**(localStorage 저장 X=스푸핑/스테일 회피) / AuthGuard 미수정(회귀 방지)
+- ★ 막힌 점: `python` Store 껍데기 → `.venv` 파이썬
+- 검증: 백엔드 RBAC 5시나리오(admin /admin/overview 200·nurse 403·미인증 401·회귀 nurse /patients 200·멱등 재시작 staff_count=2) + build·lint(오류 0) **전부 PASS**. 시드 admin1/admin1234
+- **다음 할 일:** 🔍 `bmad-code-review`(권장, 권한/보안 민감) → 통과 시 Story 5.2(직원 계정 관리)
+
+### 2026-06-21 — 📝 Story 5.1 작성 완료 (ready-for-dev) — 관리자 역할 & 전용 진입 🔑 (Epic 5 진입)
+- `bmad-create-story`로 **Story 5.1 (관리자 역할 & 전용 진입, NFR2)** 작성 ✅ → epic-5 = in-progress
+- 결과 파일: `_bmad-output/implementation-artifacts/5-1-관리자-역할-전용-진입.md`
+- 범위: **첫 RBAC(역할 기반 접근제어) 도입 — 관리자 영역 "껍데기"만** ①백엔드 — `get_current_admin`(security.py, role!=admin이면 403) + `admin1` 멱등 시드(role=admin) + `GET /api/admin/overview`(관리자 보호, 직원·환자 수 요약) ②프론트 — `AdminGuard.tsx`(NEW: AuthGuard 본떠 role==admin 체크, 일반직원→홈 차단) + `/admin` 라우트·랜딩(준비중 자리표시 카드 5.2~5.5) + `AppShell` 관리자 메뉴 조건부(admin만)
+- ★ 핵심 판단: **진짜 자물쇠는 백엔드 `get_current_admin`(403)** — 프론트 메뉴 숨김·AdminGuard는 UX 보조(3.1 철학) / **`Staff.role` 기존 사용**(모델 변경 0, admin/staff 2단계만) / **관리자 시드는 username 멱등 블록**(테이블 비었을 때만 분기 안 탐 — 이미 nurse1 존재) / **role은 `/api/auth/me`에서 읽음**(이미 반환, localStorage 저장 안 함=스푸핑/스테일 회피) / RSC 프리렌더 금지(1.4)
+- ★ 범위 밖: 직원 CRUD·직군(5.2) / 정보범위 권한 세분화(5.3) / 현황 대시보드 통계(5.4) / 기준값 설정(5.5) / 접근 감사로그 / 일반 직원 화면 제한(지금은 전 직원 모든 환자기능 유지)
+- ★ 5.2 인계: 직군(의사/간호사/원무과)을 `role`에 섞으면 권한(admin/staff)과 혼란 → 5.2에서 권한 role과 직군 job_title 분리 결정 필요
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 5.1 개발
+
+### 2026-06-21 — 🔍 Story 4.4 코드 리뷰 완료 → done! 🎉 Epic 4 전체 완료! ⏱️
+- 검사관 3종 병렬(Blind Hunter·Edge Case Hunter·Acceptance Auditor) ✅ — **AC 1~8 전부 PASS, 범위 침범 0건, "고쳐야 할 in-scope 버그 없음"(Auditor)**. 경계값(`>=30`·`//60` 음수보정)·0분 falsy·검색 회귀 없음·N+1 회피·upsert 원자성·UX-DR8 전부 정상
+- **patch 0건** — Blind/Edge가 올린 항목이 전부 멀티워커 동시성(기존 deferred 동일 계열) 또는 의도된 설계로 판정
+- defer 3건 → `deferred-work.md`: ①**백필 멀티워커 IntegrityError**(seed 레이스 동일 계열, 단일워커 무해) ②**advance-stage StageEntry upsert 동시성**(같은 환자 동시 advance 시 2번째 500 — 단 체크삭제 409 가드로 창 매우 좁음, 3.4 deferred 동일 계열) ③**naive datetime이 overdue 판정에 load-bearing**(앱 전반 deferred, 4.4는 표시뿐 아니라 판정에 사용)
+- dismiss 3건 기각: OverduePatients 오류/로딩 시 섹션 숨김(스펙 의도·60초 self-heal) / 초기로드 60초 초과 stuck(비현실적) / list_patients StageEntry 전체 조회(맵·환자수 한정, N+1 아님)
+- 상태: **4-4 = done, epic-4 = done** → **Epic 4(부서 협업 + 환자 흐름 추적) 4개 스토리 전부 완료** 🎉 (4.1 단계타임라인·4.2 인계메모·4.3 환자흐름판·4.4 대기초과알림)
+- ▶▶ **다음: Epic 5 (관리자 페이지) — Story 5.1(관리자 역할 전용 진입)** → `bmad-create-story`
+  - 인계: Epic 5는 첫 백엔드 권한 분기(role) 도입. 그동안 deferred한 RBAC·접근 감사로그(1.4/2.1)·관리자 화면 UX 보강(구현준비 점검 Major #2·#3)을 여기서 처리. `STAGE_OVERDUE_MINUTES` 등 하드코딩 기준값은 5.5에서 설정 가능하게.
+
+### 2026-06-21 — 🛠️ Story 4.4 개발 완료! (대기 초과 알림) → review ⏱️
+- 🗄️ 백엔드: 새 테이블 `StageEntry`(models.py — 환자당 현재 단계 진입시각, unique·upsert / **create_all 자동생성=마이그레이션 0**, Patient 컬럼 추가 회피) + 상수 `STAGE_OVERDUE_MINUTES=30` + 헬퍼 `stage_wait_info`(진입시각→(분,초과여부)) + `GET /api/patients` 확장(**StageEntry 일괄 맵으로 N+1 방지**, `waiting_minutes`·`is_overdue` 추가, 기존 키 9종 보존) + `advance-stage` upsert(단계 이동 시 대기시계 리셋, 기존 409·체크초기화·broadcast 보존) + `backfill_stage_entries`(lifespan, **멱등** — 기록없는 환자만, 데모 분산 `[50,5,40,10,35,70,20,45]`분)
+- 🖥️ 프론트: `PatientSearch`(PatientSummary +waiting_minutes/is_overdue, `PatientCard` +`overdue` prop=앰버 테두리+"N분 대기" 배지, opt-in이라 검색화면 무변화) + `PatientFlowBoard`(카드 overdue 전달 + 그룹헤더 단계별 초과수 앰버배지) + `OverduePatients.tsx`(NEW: /alerts 대기초과 섹션, GET /api/patients→is_overdue 필터, race가드+60초 자동갱신, 0명이면 숨김) + `alerts/page.tsx`(OverduePatients를 MedicationAlerts 위에, 3.3 미수정)
+- ★ 핵심 판단: **stage_entered_at은 새 테이블 StageEntry**(create_all이 ALTER 못 함) / **진입시각 갱신은 advance-stage 단 한 곳**(단계 변경 유일 경로) / **백필 멱등·데모 분산** / **읽기 surface는 GET /api/patients 확장 재사용**(새 엔드포인트 0, 흐름판·/alerts 둘 다) / **앰버 opt-in prop**(검색 무변화) / 기준값 하드코딩(5.5)
+- ★ 막힌 점: `python`은 Store 껍데기 → `.venv` 파이썬 / 한글 검증은 UTF-8 파일 스크립트(4.3 교훈)
+- 검증: 백엔드 5시나리오(백필 분포 5명초과·키 보존·미인증 401·advance 리셋·재시작 멱등 id=1 entered_at 보존) + build·lint(오류 0) **전부 PASS**
+- **다음 할 일:** 🔍 `bmad-code-review`(권장) → 통과 시 **Epic 4 전체 완료** 🎉 → 이후 Epic 5(관리자 페이지)
+
+### 2026-06-21 — 📝 Story 4.4 작성 완료 (ready-for-dev) — 대기 초과 알림 ⏱️ (Epic 4 마지막)
+- `bmad-create-story`로 **Story 4.4 (대기 초과 알림, FR10)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/4-4-대기-초과-알림.md`
+- 범위: ①백엔드 — 새 테이블 `StageEntry`(환자당 현재 단계 진입 시각, unique·upsert) + 상수 `STAGE_OVERDUE_MINUTES=30` + `stage_wait_info` 헬퍼 + `GET /api/patients`에 `waiting_minutes`·`is_overdue` 추가(하위호환) + `advance-stage`가 진입시각 갱신 + `lifespan` 백필(기존 8명, 데모용 시각 분산·멱등) ②프론트 — `PatientCard` `overdue?` prop(앰버+배지, 흐름판만 전달) + `PatientFlowBoard` 전달 + `OverduePatients.tsx`(NEW: /alerts 대기초과 섹션) + `alerts/page.tsx` 추가
+- ★ 핵심 판단: **`stage_entered_at`은 새 테이블 StageEntry**(Patient 컬럼 추가는 create_all이 ALTER 못 함 — 3.2/3.3/3.4/4.2 동일 우회) / **환자당 1건 upsert**(이력 로그 아님) / **진입 시각 갱신은 advance-stage 단 한 곳**(단계 변경 유일 경로) / **기존 환자 백필**(멱등, 데모 가시성 위해 시각 분산) / **읽기 surface는 새 엔드포인트 없이 GET /api/patients 확장**(흐름판·/alerts 둘 다 재사용) / **앰버는 opt-in prop**(검색 화면 무변화) / 기준값 하드코딩(5.5)
+- ★ 범위 밖: 기준값 관리자 UI(5.5)·진짜 푸시·단계별 차등 기준·대기 통계(5.4)·진입 이력 로그·전역 WS
+- ★ 인계: 4.3에서 남긴 "단계 진입 시각 필요" 과제를 이행 / 4.4 끝나면 **Epic 4 전체 완료** 🎉
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 4.4 개발
+
+### 2026-06-21 — 🔍 Story 4.3 코드 리뷰 완료 → done! 🗂️ (환자 흐름판)
+- 검사관 3종 병렬(Blind Hunter·Edge Case Hunter·Acceptance Auditor) ✅ — **AC 1~8 전부 PASS, 범위 침범 0건**(대기초과 앰버·알림·단계변경 UI·전역 WS·관리자 통계 미구현 확인), PatientCard 재사용이 검색 화면 회귀 없음·RSC PHI 미노출 확인
+- patch 2건 즉시 적용(둘 다 `PatientFlowBoard.load` 함수): ①**새로고침 race 가드**(`abortRef`로 직전 요청 abort + `reqIdRef`로 요청번호 스테일 가드 → 마운트·새로고침·연타 겹쳐도 늦은 응답이 최신 못 덮음, 언마운트 시 abort. PatientSearch cancelled 패턴 일반화) ②**load 시작 시 `setError(null)`**(재시도 중 옛 오류 잔상 제거)
+- 재검증: build·lint(오류 0) PASS → **sprint-status: 4-3 = done**
+- defer 1건 → `deferred-work.md`: 오류 문구 `localhost:8000` 하드코딩(2.3에서 이미 기록된 사안의 새 인스턴스, 배포 시 일괄 정리)
+- dismiss 4건 기각: 그룹화 비memoization(수십~수백 규모 무해) / role=status 재낭독(사용자 주도) / 폰 4번째 탭(justify-around 균등) / 빈 문자열 단계(현 코드경로 없음+"기타" 방어)
+- ▶▶ **다음: Story 4.4 (대기 초과 알림, FR10) — Epic 4 마지막** → `bmad-create-story`
+  - 인계: 대기시간 계산하려면 **"단계 진입 시각"이 필요**한데 현재 `Patient.current_stage`만 있고 진입 시각 없음 → 4.4에서 백엔드에 `stage_entered_at` 추가 + 3.4 `advance-stage`가 갱신하도록 확장. 흐름판 카드에 앰버 테두리/배지 + `/alerts`(3.3)에 대기초과 항목 추가가 UI 작업. 기준값(30분) 하드코딩(5.5에서 설정 가능하게).
+
+### 2026-06-21 — 🛠️ Story 4.3 개발 완료! (환자 흐름판) → review 🗂️
+- 🖥️ **프론트 전용, 백엔드 변경 0** — 새 화면 `/board` + `PatientFlowBoard.tsx`(NEW)
+- `PatientFlowBoard`: `GET /api/patients`(전체, 보호됨) 호출 → `current_stage`로 **단계별 그룹핑**(STAGE_ORDER 접수·진료·검사·수납 4개 섹션 + 비표준 단계는 "기타" 방어). PC(md↑) 4열 그리드·폰 세로 스택, 그룹 헤더=단계명+인원수 배지, 빈 그룹="없음", 새로고침 버튼(44px), 로딩/오류/전체0명 상태. fetch는 2.2/2.3 패턴(AbortController+signal, 401→clearToken+/login)
+- `board/page.tsx`(NEW): `<AuthGuard><AppShell>` + `<PatientFlowBoard/>`. **RSC 프리렌더 안 함**(1.4 — board.html에 PHI 미노출 확인)
+- `PatientSearch.tsx`(UPDATE): `PatientCard` export + `hideStage?` prop(흐름판은 그룹이 단계라 배지 숨김 → 카드 재사용·중복 0). `AppShell.tsx`(UPDATE): `NAV`에 흐름판 1개 추가(사이드+하단탭 자동). 홈(UPDATE): 흐름판 QuickCard
+- ★ 핵심: **기존 목록 API 재사용**(새 API·모델·마이그레이션 0) / **읽기 전용**(단계 변경=3.4 advance-stage만) / 그룹화는 클라이언트 / 알 수 없는 단계 "기타" 방어
+- ★ 막힌 점: lint `set-state-in-effect` → effect를 `void (async()=>{await load()})()`로 감싸 해결(PatientDetail 패턴) / 단계분포 검증 시 `python -c` 한글 인코딩 깨짐 → UTF-8 파일 스크립트로 재확인(코드 정상)
+- 검증: build·lint(오류 0) / 단계 분포 접수1·진료2·검사2·수납3=8명(합계 일치·기타 없음) / 미인증 401 / 알레르기 4명 배지 / RSC PHI 미노출 **전부 PASS**
+- **다음 할 일:** 🔍 `bmad-code-review`(권장) → 통과 시 Story 4.4(대기 초과 알림) = Epic 4 마지막
+
+### 2026-06-21 — 📝 Story 4.3 작성 완료 (ready-for-dev) — 환자 흐름판 🗂️
+- `bmad-create-story`로 **Story 4.3 (환자 흐름판 전체 현황, FR9)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/4-3-환자-흐름판-전체-현황.md`
+- 범위: **프론트 전용, 백엔드 변경 0** — 새 화면 `/board`(전체 환자를 단계별로 묶어 보드/그룹 목록으로) + `PatientFlowBoard.tsx`(NEW) + 네비 진입점(AppShell NAV + 홈 QuickCard)
+- ★ 핵심 판단: **기존 `GET /api/patients` 재사용**(2.2에서 이미 `current_stage` 포함 → 새 API·모델·마이그레이션 0) / 그룹화는 클라이언트(STAGE_ORDER `["접수","진료","검사","수납"]`, 알 수 없는 단계는 "기타" 방어) / **읽기 전용**(단계 변경은 3.4 advance-stage만) / RSC 프리렌더 금지(1.4 — 통과 후 클라 fetch) / 카드·fetch는 2.2 PatientSearch 재사용
+- ★ 범위 밖: **대기 초과 앰버 강조+알림=4.4(FR10)**(단계 머문 시간 계산·앰버·알림 전부 이번 미구현) / 흐름판 전역 실시간 WS(후속, 기존은 환자별 채널) / 관리자 통계=Epic5 / 단계 변경 UI
+- ★ 4.4 인계: 대기시간 계산하려면 "단계 진입 시각"이 필요 → 현재 `current_stage`만 있고 진입 시각 없음 → 4.4에서 `stage_entered_at` 추가 + advance-stage 갱신 필요
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 4.3 개발
+
+### 2026-06-21 — 🔍 Story 4.2 코드 리뷰 완료 → done! 🔄 (부서 간 자동 전달)
+- 검사관 3종 병렬(Blind Hunter·Edge Case Hunter·Acceptance Auditor) ✅ — **AC 1~8 전부 PASS, 범위 침범 0건**(메모 삭제/수정·단계별 필터·담당자 지정·대기초과·흐름판 미구현 확인), 핵심 설계(from_stage 서버 자동기록·인증 보호·빈 메모 422·하위호환 키 8종 보존) 견고
+- patch 2건 즉시 적용: ①**handover_notes 정렬에 id 보조키**(`created_at desc, id desc` → 같은 시각 저장 메모도 최신순 결정적, AC5 "새 메모 최상단" 직접 지원) ②**메모 길이 상한**(`HANDOVER_NOTE_MAX_LEN=2000`, strip 후 초과 시 422 + textarea maxLength=2000 — 무한 길이 입력이 모든 조회·broadcast 비대화 방지, 빈 메모 422와 같은 서버 게이트 철학)
+- 재검증: 길이상한(2000→200·2001→422·strip후초과→422)·정렬(ids 내림차순)·회귀(정상200/빈422)·build·lint **전부 PASS** → **sprint-status: 4-2 = done**
+- defer 3건 → `deferred-work.md`: ①**created_at naive datetime**(4.2가 정렬 키로 사용 — 표시 시각+순서 영향, 앱 전반 UTC 통일 권장) ②**async 내 동기 DB 세션**(이벤트루프 블로킹, 2.4 동일) ③**저장 시 이중 fetch**(onSaved + WS echo, 2.4/4.1 패턴, 깜빡임)
+- dismiss 7건 기각: author N+1(5건 한정+identity map) / 이중제출 서버 dedup 없음(append-only=의도) / author_name ""(프론트 "—" 폴백) / create_all 마이그레이션(3.2~3.4 확립 패턴) / from_stage 빈 배지(서버 제어·항상 값 존재) / U+200B(FE·BE trim 일치) / 코스메틱 토큰
+- ▶▶ **다음: Story 4.3 (환자 흐름판 전체 현황)** → `bmad-create-story`
+  - 인계: 전체 환자를 단계별(접수→진료→검사→수납) 보드/표로. 새 API `GET /api/patients/board`(또는 기존 목록에 단계 그룹) + 새 페이지(`/board` 또는 홈 통합). 4.2 `HandoverNote`를 흐름판 "최근 메모" 프리뷰로 활용 가능. `STAGE_ORDER`·`manager.broadcast` 재사용.
+
+### 2026-06-21 — 🛠️ Story 4.2 개발 완료! (부서 간 자동 전달) → review 🔄
+- 🗄️ 백엔드: 새 테이블 `HandoverNote`(models.py — patient_id·from_stage·note·author_id·created_at, **create_all로 자동 생성**=마이그레이션 0) + `POST /api/patients/{id}/handover-note`(async, 보호됨 — **`from_stage`는 서버가 `patient.current_stage` 읽어 자동기록**=클라 조작 불가, 빈 메모 strip 후 422, 저장 후 `manager.broadcast`=2.4 실시간 재사용) + `get_patient` 묶음에 **`handover_notes` 최신 5건**(created_at 내림차순, `Staff.full_name` 조인해 `author_name` 포함, 기존 키 8종 전부 보존=하위호환)
+- 🖥️ 프론트: `HandoverNoteSection.tsx`(NEW) — 메모 목록(최신순, from_stage 배지+작성자·시각+내용)·작성 폼(textarea+44px 버튼, 빈 입력 비활성, `submittingRef` 이중제출 방지=3.1, 401→clearToken+/login, 성공시 입력비우고 onSaved 실시간갱신) + `lib/format.ts`(NEW: `fmtDate`·`fmtDateTime` 공통 헬퍼로 추출, PatientDetail 인라인 함수 교체) + `PatientDetail.tsx`(UPDATE: handover_notes 타입 + 검사결과 아래·수납 위 섹션 삽입, 기존 배너·타임라인·체크리스트·처방폼·WS 전부 보존)
+- ★ 핵심 판단 구현: **인계 메모 = FR8 자동 전달**(부서A 저장→broadcast→WS→부서B 화면 자동 갱신) / **from_stage 서버 자동기록**(작성 시점 단계, 조작 방지) / **메모 append-only**(삭제·수정 없음, 감사추적) / **실시간 공짜**(2.4 broadcast 재사용, 별도 구현 0)
+- ★ 막힌 점: `python`은 Windows Store 껍데기(exit 49) → `.venv/Scripts/python.exe` 직접 사용 / curl 인라인 한글이 400(인코딩) → ASCII·UTF-8파일로 검증(코드 정상)
+- 검증: 백엔드 7시나리오(미인증 GET 401 / 인증 GET `handover_notes:[]`+키8종 / 정상 POST 200·from_stage="수납" 자동기록·author_name="김지영" 조인 / 빈메모 422 / 미인증 POST 401 / 없는환자 404 / 5건제한 최신순) **전부 PASS**, build·lint 통과(오류 0)
+- **다음 할 일:** 🔍 `bmad-code-review`(권장) → 통과 시 Story 4.3(환자 흐름판 전체 현황)
+
+### 2026-06-21 — 📝 Story 4.2 작성 완료 (ready-for-dev) — 부서 간 자동 전달 🔄
+- `bmad-create-story`로 **Story 4.2 (부서 간 자동 전달, FR8)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/4-2-부서-간-자동-전달.md`
+- 범위: **인계 메모(HandoverNote) 기능** — ①백엔드 — 새 테이블 `HandoverNote`(patient_id·from_stage·note·author_id·created_at) + `POST /api/patients/{id}/handover-note`(auth, 빈메모 422, from_stage 서버 자동 기록, broadcast) + `GET /api/patients/{id}` 묶음에 `handover_notes` 최신 5건 추가(기존 키 전부 보존=하위호환) ②프론트 — `HandoverNoteSection.tsx`(NEW: 메모 목록 + 작성 폼, submittingRef 이중제출 방지) + `PatientDetail.tsx` 업데이트(handover_notes 타입 + 섹션 삽입) + `lib/format.ts`(NEW: fmtDate·fmtDateTime 공통 헬퍼)
+- ★ 핵심 판단: **`from_stage`는 서버가 자동 기록**(클라 조작 불가 — 저장 시 `patient.current_stage` 읽음) / **메모는 append-only**(삭제·수정 없음, 감사추적) / **create_all로 자동 생성**(새 테이블, 마이그레이션 불필요 — 3.2/3.3/3.4 동일 패턴) / **실시간은 공짜**(POST 후 broadcast → WS → loadBundle, 별도 구현 없음)
+- ★ 재사용 패턴: 2.4 `manager.broadcast` / 3.1 `submittingRef` 이중제출 방지 / 1.4 `clearToken + router.replace('/login')` / 3.2 SafetyAck append-only 기록 패턴
+- ★ 범위 밖: 메모 삭제/수정(후속) / 단계별 필터(후속) / 담당자 지정(Epic 5 권한과 함께) / 대기 초과(4.4) / 환자 흐름판(4.3)
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 4.2 개발
+
+### 2026-06-21 — 🛠️ Story 4.1 개발 완료! (환자 단계 타임라인) → review 🗺️
+- 🖥️ **프론트 전용, 백엔드 변경 0** — 새 컴포넌트 `StageTimeline.tsx`(점+선 타임라인) 신설 + `PatientDetail.tsx` 수정
+- `StageTimeline`: STAGE_ORDER `["접수","진료","검사","수납"]`의 4개 단계를 가로로 배열, 점+연결선. **완료=초록 원+체크 아이콘+초록 글자+초록선**, **현재=파랑 원+4px 파랑 글로우+굵은 파랑 글자+파랑선**, **예정=회색 원+회색 글자**. 색+아이콘+글자 3중(UX-DR8). `aria-current="step"` 접근성. 알 수 없는 단계는 접수=현재로 방어.
+- `PatientDetail`: 기존 텍스트 배지(`<span>` 1줄)를 제거하고 환자 헤더 카드 아래에 `<StageTimeline currentStage={p.current_stage} />` 삽입. 기존 배너·체크리스트·처방폼·WS 전부 보존.
+- ★ 연결선 색 규칙: 왼쪽 선 = 완료·현재 단계면 초록(여기까지 도달), 오른쪽 선 = 완료만 초록(아직 안 간 구간은 회색)
+- ★ `border-bg-base` 대신 `border-[#f7f9fb]` 사용(Tailwind가 CSS 변수로 border 색 못 만드는 케이스 방어)
+- 검증: `npm run build` 성공(컴파일 OK, 타입 OK, 정적 페이지 생성 OK) / `npm run lint` 오류 0건(경고 3건은 기존 폰트 설정, 이번 변경과 무관)
+- **다음 할 일:** 🔍 `bmad-code-review`(권장) → 통과 시 Story 4.2(부서 간 자동 전달)
+
+### 2026-06-21 — 📝 Story 4.1 작성 완료 (ready-for-dev) — Epic 4 진입 🗺️
+- `bmad-create-story`로 **Story 4.1 (환자 단계 타임라인, FR9/UX-DR4)** 작성 ✅ → epic-4 = in-progress
+- 결과 파일: `_bmad-output/implementation-artifacts/4-1-환자-단계-타임라인.md`
+- 범위: **프론트 전용, 백엔드 변경 0** — 새 컴포넌트 `StageTimeline.tsx`(점+선 타임라인) + `PatientDetail.tsx` 수정(텍스트 배지 제거 → 타임라인으로 교체)
+- ★ 핵심 판단: `current_stage`는 이미 `GET /api/patients/{id}` 묶음에 포함(2.1·3.4 완비) → API 추가 없음 / 단계 변경 UI 금지(3.4 ProcedureChecklist "다음 단계로" 재사용) / STAGE_ORDER = `["접수","진료","검사","수납"]` 프론트도 동일 정의 / 완료=초록+체크아이콘, 현재=파란+글로우+radio아이콘, 예정=회색(색+아이콘+글자 3중=UX-DR8) / 연결선: 왼쪽은 done·now 모두 초록, 오른쪽은 done만 초록
+- ★ 범위 밖: 단계 변경 버튼(3.4) / 환자 흐름판(4.3) / 대기초과 앰버(4.4) / 부서 간 전달(4.2)
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 4.1 개발
+
+
 
 ### 2026-06-20 — 🔍 Story 3.4 코드 리뷰 완료 → done! 🎉 Epic 3 전체 완료!
 - 검사관 3종 병렬(**절차 우회 가능성 집중**) ✅ — **AC 1~8 전부 PASS, 범위 침범 없음, 안전 게이트 우회 불가**(직접 API 호출 409·가짜 항목키 400·동시 호출도 첫 advance가 체크 삭제 → 2번째 409)

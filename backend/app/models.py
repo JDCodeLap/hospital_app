@@ -27,7 +27,11 @@ class Staff(SQLModel, table=True):
     username: str = Field(unique=True, index=True)
     hashed_password: str  # 평문 금지 — pwdlib 해시값만 저장
     full_name: str = ""
-    role: str = "staff"  # 1차는 staff 단일. 역할 세분화는 Epic 5
+    # 권한(role)과 직군(job_title)은 다른 개념이다(Story 5.2) — 섞지 않는다.
+    #  - role: "admin" / "staff" — 관리자 페이지 접근 가능 여부(get_current_admin 게이트). 세분화는 5.3.
+    #  - job_title: 의사/간호사/원무과/기타 — 어떤 일을 하는 사람인지(분류·표시). 화면을 제한하지 않음.
+    role: str = "staff"
+    job_title: str = ""  # 직군(Story 5.2). 빈 값 허용. 기존 staff 테이블엔 멱등 ALTER로 보강.
     is_active: bool = True
 
 
@@ -154,3 +158,41 @@ class ChecklistCheck(SQLModel, table=True):
     item_key: str  # 항목 키("identity" / "fasting" / "consent")
     checked_by: int = Field(foreign_key="staff.id")  # 체크한 직원
     checked_at: datetime  # 체크 시각
+
+
+class HandoverNote(SQLModel, table=True):
+    """부서 간 인계 메모(Story 4.2, FR8).
+
+    한 부서가 처리를 마치고 다음 부서로 넘길 때 남기는 인수인계 메모.
+    전화·메모지 없이도 다음 부서 직원이 환자 화면에서 바로 확인할 수 있다(자동 전달).
+    from_stage(메모 작성 시점의 환자 단계)는 서버가 patient.current_stage를 읽어 자동 기록 →
+    클라이언트가 임의 단계를 조작할 수 없다. 메모는 append-only(삭제·수정 없음, 감사 추적).
+    새 테이블이라 create_all로 생성(마이그레이션 불필요).
+    """
+
+    __tablename__ = "handover_note"
+
+    id: int | None = Field(default=None, primary_key=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True)
+    from_stage: str  # 메모를 남길 당시 환자의 단계(접수/진료/검사/수납) — 서버가 자동 기록
+    note: str  # 인계 메모 내용
+    author_id: int = Field(foreign_key="staff.id")  # 메모를 남긴 직원
+    created_at: datetime  # 작성 시각
+
+
+class StageEntry(SQLModel, table=True):
+    """환자가 현재 단계에 진입한 시각(Story 4.4, FR10).
+
+    "현재 시각 − entered_at = 그 단계에 머문 대기 시간" → 기준(기본 30분) 초과면 대기 초과.
+    환자당 1건(unique patient_id)만 두고, 단계가 바뀔 때(3.4 advance-stage) upsert로 갱신한다.
+    진입 이력 전체 로그가 아니라 '현재 단계 진입 시각'만 보관(이력 추적은 후속).
+    새 테이블이라 create_all로 생성(Patient 컬럼 추가는 create_all이 ALTER 못 하므로 우회 —
+    3.2/3.3/3.4/4.2와 동일 패턴). 기존 환자는 서버 시작 시 백필로 채운다.
+    """
+
+    __tablename__ = "stage_entry"
+
+    id: int | None = Field(default=None, primary_key=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True, unique=True)  # 환자당 1건
+    stage: str  # 현재 단계(접수/진료/검사/수납)
+    entered_at: datetime  # 그 단계에 들어온 시각

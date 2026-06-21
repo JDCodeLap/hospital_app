@@ -71,8 +71,44 @@
 - `datetime.now()` 타임존 naive(3.3에서도) — 알림 due 계산(`now.strftime("%H:%M")`)과 `administered_date`/`administered_at`이 서버 로컬 naive 시간. 서버(UTC)와 병원(KST) 타임존이 다르면 due 판정과 완료 날짜가 어긋남. 앱 전반(add_visit/add_medication/safety-ack 포함)과 함께 배포 전 UTC(aware)로 통일. (backend/app/main.py 전반)
 - 투약 schedule 편집 후 stale slot 완료 시 복구 경로 없음 — `administer_medication`이 `scheduled_time not in parse_schedule_times(med.schedule)`면 400을 던지는데, 화면에 이미 렌더된 옛 슬롯(스케줄이 바뀐 약)을 누르면 400이 나고 목록에서 정리되지 않는다. 현재 투약 수정 기능이 없어 트리거되지 않음. 투약 편집 기능 도입 시 알림 화면 reconcile(없는 슬롯 자동 제거) 처리. (backend/app/main.py administer_medication)
 
+## Deferred from: code review of story 4-1-환자-단계-타임라인 (2026-06-21)
+
+- **Error Boundary 없음**: `StageTimeline`(및 기존 컴포넌트들)에 Error Boundary가 없어 렌더 오류 시 단계 표시가 사라지고 React 오류가 상위로 전파됨. 시스템 전반 과제. 전역 Error Boundary 도입 시 함께 처리. (`frontend/src/components/StageTimeline.tsx`)
+- **접근성 polish — aria-current 위치 + sr-only 텍스트**: `aria-current="step"`이 연결선(데코 요소)까지 포함한 wrapper `<div>`에 걸려 있어 스크린리더가 불필요한 요소까지 읽을 수 있음. 또한 "현재 단계임"을 명시하는 `<span className="sr-only">현재 단계</span>` 보조 텍스트가 없음. AC 8(색+아이콘+글자 3중)은 충족하므로 이는 추가 polish. WAI-ARIA 정밀 검수 단계에서 함께 처리. (`frontend/src/components/StageTimeline.tsx:48`)
+- **WS + onSaved 이중 fetch 경합(2.4에서 내려온 패턴)**: `advance-stage` 성공 후 `onSaved()` → `loadBundle` 호출과 WS `patient_updated` 신호 → `loadBundle` 호출이 거의 동시에 발생, 늦게 도착한 응답이 이른 응답을 덮어써 순간 깜빡임 가능. 최종 상태는 올바르게 수렴함. 2.4 deferred(async DB)와 함께 WS 아키텍처 개선 시 처리. (`frontend/src/components/PatientDetail.tsx`)
+- **advance-stage 후 낙관적 업데이트 없음**: "다음 단계로" 클릭 성공 후 `loadBundle` 응답 도착 전까지 수백ms 동안 타임라인이 이전 단계를 "현재"로 표시. `StageTimeline`은 수동 수신 컴포넌트라 공유 상태 도입 없이는 해결 어려움. 향후 전역 상태 관리(예: Zustand/Context) 도입 시 낙관적 업데이트 추가. (`frontend/src/components/StageTimeline.tsx`, `ProcedureChecklist.tsx`)
+- **advancingRef 락이 onSaved() 완료 전 해제(Story 3.4 기존 이슈)**: `ProcedureChecklist`의 `advance()` 함수에서 `finally`가 `onSaved?.()` 비동기 완료 전에 `advancingRef.current = false`를 리셋하여, 느린 네트워크에서 reload 중 재클릭이 허용됨(두 번째 advance는 백엔드 409로 안전하게 거부). 데이터 파괴 없음. Story 3.4 scope 이슈. `onSaved` await 완료 후 락 해제, 또는 `advancingRef`를 `loadBundle` Promise chain에 연결. (`frontend/src/components/ProcedureChecklist.tsx:114`)
+
 ## Deferred from: code review of story 3-4-필수-절차-체크리스트 (2026-06-20)
 
 - advance-stage 동시성 가드 없음(행 잠금/원자 전이 X): 동시 advance 또는 advance↔uncheck 경합 시 최악 idempotent 재커밋 또는 500 가능. **안전 게이트 우회는 아님**(첫 advance가 체크를 삭제 → 두 번째는 409). 단일워커 데모에선 미발생. 멀티워커 배포 시 `SELECT ... FOR UPDATE` 또는 조건부 `UPDATE patient SET current_stage=:nxt WHERE id=:id AND current_stage=:cur`(rowcount 확인)로 전이를 원자화. toggle uncheck도 동시 삭제 시 StaleDataError 가능 → try/except로 멱등화. (backend/app/main.py advance_stage, toggle_checklist)
 - 단계 진행 시 체크 기록 하드 삭제(감사 추적 소실): advance 시 그 환자의 ChecklistCheck(누가·언제 체크했는지 포함)를 전부 delete. 안전 게이트가 충족됐다는 "증거"가 사라져 사후 책임추적 불가. 스펙상 "다음 절차 위해 체크 초기화"는 의도된 동작이나, 환자안전 강제 기능이므로 Epic 5 감사 리포트에서 archive(soft-complete: completed_stage 컬럼 등으로 보존) 설계 검토. (backend/app/main.py advance_stage)
 - 비표준 current_stage·항목세트 변경 대비 부족: ①current_stage가 STAGE_ORDER 밖(빈 값/오타/미래 단계 "퇴원" 등)이면 next_stage가 None을 반환해 advance가 "마지막 단계입니다"(400)로 오인 표시되고 프론트도 "최종 단계입니다"로 표기 — 둘은 구분돼야 함. 현재는 current_stage가 항상 표준값(시드)이고 단계 편집 기능이 없어 미발생(latent). ②CHECKLIST_ITEMS에 항목을 추가하면 진행 중이던 환자의 all_checked가 조용히 false로 바뀜(체크리스트 세트 버전닝 없음). 단계 편집/항목 편집(Epic 5) 도입 시 함께 처리. (backend/app/main.py next_stage·advance_stage, frontend/src/components/ProcedureChecklist.tsx)
+
+## Deferred from: code review of story 4-2-부서-간-자동-전달 (2026-06-21)
+
+- created_at 타임존 naive: `HandoverNote.created_at = datetime.now()`(naive)이며 `.isoformat()`에 오프셋이 없어 프론트 `new Date(iso)`가 브라우저 로컬 시각으로 해석. 4.2는 이 값을 "최신 5건" **정렬 키**로도 사용하므로(표시뿐 아니라 순서) 서버 시계 역행/타임존 차이 시 영향이 표시 이상으로 커짐. 앱 전반 naive datetime 이슈(acknowledged_at·administered_at 동일)와 함께 UTC aware로 통일 권장. (backend/app/main.py, models.py)
+- async 핸들러 내 동기 DB 세션: `async def add_handover_note`가 동기 `session.commit()/get()/refresh()`를 호출 → 이벤트 루프 블로킹. 부하 시 요청 직렬화. 2.4부터 이어진 앱 전반 패턴이라 일괄 비동기 드라이버 전환 또는 `run_in_threadpool` 검토. (backend/app/main.py)
+- 저장 시 이중 fetch: 메모 저장 성공의 `onSaved()`(즉시 reload)와 백엔드 broadcast가 WS로 되돌아와 트리거하는 reload가 겹쳐 같은 환자 묶음을 두 번 GET(깜빡임). 2.4/4.1에서 내려온 시스템 패턴. 낙관적 업데이트 또는 WS echo 억제로 해소 가능. (frontend/src/components/PatientDetail.tsx)
+
+## Deferred from: code review of story 4-3-환자-흐름판-전체-현황 (2026-06-21)
+
+- 오류 문구 localhost 하드코딩: `PatientFlowBoard`의 fetch 실패 안내가 `http://localhost:8000`을 문자열로 노출(`PatientSearch`·`PatientDetail`과 동일 패턴). 운영 배포 시 사용자에게 로컬 주소가 보임. 2.3 리뷰에서 이미 deferred된 동일 사안의 새 인스턴스 — 배포 단계에서 환경변수 기반 문구로 일괄 정리. (frontend/src/components/PatientFlowBoard.tsx)
+
+## Deferred from: code review of story 4-4-대기-초과-알림 (2026-06-21)
+
+- 백필 멀티워커 IntegrityError: `backfill_stage_entries`가 매 부팅 실행되며 check-then-insert 패턴. `uvicorn --workers N` 동시 부팅 시 두 워커가 같은 환자에 StageEntry를 삽입 → `patient_id` unique 충돌로 IntegrityError가 lifespan 밖으로 전파되어 워커 부팅 크래시 가능. 기존 seed 멀티워커 레이스(1-2/1-3 deferred)와 동일 계열. 단일워커 개발에선 무해. 하드닝 방법: `try/except IntegrityError: session.rollback()`(MedicationAdministration/SafetyAck 멱등 패턴) 또는 시드/백필을 별도 1회성 스크립트로 분리. (backend/app/main.py)
+- advance-stage StageEntry upsert 동시성: `advance_stage`의 진입시각 upsert가 `select().first()` 후 insert/update하는 check-then-act. 같은 환자 advance를 동시에 호출하면 둘 다 entry=None을 보고 StageEntry를 add → 2번째 commit이 unique 충돌 IntegrityError(현재 미캐치 → 500). 단 advance는 체크리스트 삭제로 2번째 호출이 409로 막히는 기존 가드가 있어 실제 창은 매우 좁음. 3.4 리뷰의 "advance 동시성 가드 없음(행 잠금 X)" deferred와 동일 계열. 멀티워커 배포 시 SELECT FOR UPDATE 또는 try/except IntegrityError로 원자화. (backend/app/main.py)
+- naive datetime이 대기초과 '판정'에 사용됨: `stage_wait_info`/`list_patients`가 `datetime.now()`(타임존 naive)로 대기시간 계산 및 임계(30분) 비교. 앱 전반 naive datetime은 이미 deferred(acknowledged_at·administered_at 등)이나, 4.4는 표시뿐 아니라 overdue '판정'에 load-bearing이라 영향이 표시 이상. 서버 시계가 안정적이면 내부 일관성은 유지됨. 앱 전반 UTC aware 통일 시 함께 정리. (backend/app/main.py, models.py)
+
+## Deferred from: 사용자 요청 보완 — 처방·인계메모 수정/삭제 (2026-06-21)
+
+- **인계메모 append-only 설계가 수정/삭제 허용으로 바뀜(감사 추적 약화)**: Story 4.2는 `HandoverNote`를 의도적으로 append-only(수정·삭제 없음, 감사 추적)로 만들었으나, 사용자 요청으로 `PATCH/DELETE /api/patients/{id}/handover-note/{noteId}`를 추가해 **누가 메모를 고치거나 지웠는지 이력이 남지 않게** 됨. 실제 병원에서는 의료기록 정정 시 원본 보존 + "정정 기록(누가·언제·왜)"을 남기는 방식이 표준. 운영 도입 시 ①소프트 삭제/버전 이력 또는 ②정정-메모 방식 + 변경 감사 로그(Epic 5 권한/감사와 함께)로 재설계 권고. (backend/app/main.py update/delete_handover_note, models.py HandoverNote)
+- **처방 수정/삭제 감사 로그 없음**: `PATCH/DELETE /api/patients/{id}/medications/{medId}` 추가로 처방을 고치거나 지울 수 있게 됐으나 누가·언제·무엇을 바꿨는지 기록이 없음(3.1의 "위험 처방 오버라이드 감사로그 없음" deferred와 동일 계열). 처방 수정 시 약 이름 변경은 알레르기 재검사를 거치고(409), 삭제는 투약완료 기록이 있으면 FK로 보호되지만, 변경 자체의 감사 추적은 없음. Epic 5 감사 기능에서 함께 처리 권고. (backend/app/main.py update/delete_medication)
+
+## Deferred from: code review of story 5-1-관리자-역할-전용-진입 (2026-06-21)
+
+- 하드코딩 관리자 시드 비번(admin1234): `lifespan`이 매 부팅 `admin1`/`admin1234`(role=admin)를 멱등 시드. 소스에 박힌 기본 관리자 계정이라 비로컬 배포 시 앱을 아는 누구나 전체 관리 권한으로 로그인 가능. 1-3에서 deferred한 nurse1/test1234 기본계정 차단과 동일 계열이나 **관리자라 영향 범위가 큼**. 배포 시 dev 플래그(SEED_DEMO_USERS 등)로 시드 차단, 또는 첫 부팅 시 랜덤 비번/강제 변경. (backend/app/main.py)
+- role 자유문자열 정확 매칭: `get_current_admin`은 `current.role != "admin"`, 프론트는 `=== "admin"`로 정확 비교. `Staff.role`은 자유 문자열(기본 "staff"). 현재는 role을 만드는 경로가 시드뿐이라 `" admin"`·`"Admin"`·null 같은 값이 안 나와 무해하고, fail-closed라 권한 상승도 없음. 단 **Story 5.2에서 관리자가 역할/직군을 편집**하게 되면 잘못된 표기가 조용히 권한 미부여(락아웃/불일치)를 유발 → 쓰기 시점에 normalize(`strip().lower()`)하거나 role을 enum/제약으로 강제. 프론트·백엔드가 같은 정규화 규칙을 써야 메뉴와 API가 일치. (backend/app/security.py, frontend AppShell.tsx/AdminGuard.tsx)
+- admin1 시드 멀티워커 IntegrityError: `if admin1 not exists: add` check-then-insert가 `uvicorn --workers N` 동시 부팅 시 두 워커 모두 "없음" 판정 → 2번째 commit이 username unique 충돌(IntegrityError, lifespan은 OperationalError만 catch) → 워커 부팅 크래시 가능. 기존 nurse1/TestItem/seed_patients/StageEntry 백필과 동일 계열(이미 deferred). 단일워커 개발 무해. try/except IntegrityError 또는 마이그레이션-타임 시드로 하드닝. (backend/app/main.py)
+- (재검토 2026-06-21 추가) `/api/admin/overview` 카운트가 전체 행을 메모리로 적재: `len(session.exec(select(Staff)).all())`·`len(...Patient...)`가 직원·환자 전 행(해시 비번·PHI 포함)을 앱 메모리로 끌어와 길이만 센다. 데모 규모(직원 2·환자 8)에선 무해하나 환자 수가 커지면 O(n) 메모리·전송 비용. `select(func.count())`(또는 `session.scalar`)로 DB에서 집계하도록 정리. 집계 숫자만 반환하므로 노출은 없음(반환 형태는 dict 리터럴). (backend/app/main.py) — 2-1/4.3의 N+1/스케일 defer 계열

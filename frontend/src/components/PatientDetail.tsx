@@ -13,9 +13,19 @@ import { useParams, useRouter } from "next/navigation";
 
 import { API_BASE, WS_BASE } from "@/lib/api";
 import { authHeader, clearToken, getToken } from "@/lib/auth";
+import { fmtDate, fmtDateTime } from "@/lib/format";
 import { PrescribeForm } from "@/components/PrescribeForm";
+import {
+  MedicationList,
+  type MedicationItem,
+} from "@/components/MedicationList";
 import { SafetyBanner } from "@/components/SafetyBanner";
 import { ProcedureChecklist, type Checklist } from "@/components/ProcedureChecklist";
+import { StageTimeline } from "@/components/StageTimeline";
+import {
+  HandoverNoteSection,
+  type HandoverNote,
+} from "@/components/HandoverNoteSection";
 import { Icon } from "@/components/Icon";
 
 // GET /api/patients/{id} 응답 묶음의 모양(필요한 필드만)
@@ -32,7 +42,7 @@ type PatientBundle = {
   };
   visits: { visited_at: string; department: string; reason: string }[];
   diagnoses: { name: string; diagnosed_at: string; status: string }[];
-  medications: { drug_name: string; dose: string; schedule: string; status: string }[];
+  medications: MedicationItem[];
   lab_results: {
     test_name: string;
     value: string;
@@ -49,6 +59,8 @@ type PatientBundle = {
   } | null;
   // 필수 절차 체크리스트(3.4): 항목·전체체크여부·다음단계
   checklist?: Checklist;
+  // 부서 간 인계 메모(4.2): 최신 5건
+  handover_notes?: HandoverNote[];
 };
 
 // 화면 상태: 불러오는 중 / 정상 / 없는 환자(404) / 오류
@@ -61,23 +73,7 @@ function genderLabel(g: string): string {
   return g || "기타";
 }
 
-// ISO 날짜/일시 → 한국어 표기(잘못된 값이면 원본 그대로 안전 반환)
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleDateString("ko-KR");
-}
-function fmtDateTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime())
-    ? iso
-    : d.toLocaleString("ko-KR", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
+// 날짜/일시 표기는 공통 헬퍼(@/lib/format)로 분리 — HandoverNoteSection 등과 동일 방식 공유
 
 export function PatientDetail() {
   const router = useRouter();
@@ -255,6 +251,9 @@ function DetailContent({
   const labResults = bundle.lab_results ?? [];
   const billings = bundle.billings ?? [];
 
+  // 처방 수정 대상(잘못 입력 정정). null이면 PrescribeForm은 '추가 모드'.
+  const [editingMed, setEditingMed] = useState<MedicationItem | null>(null);
+
   return (
     <>
       {/* 안전 경고 배너(Story 3.2): 미확인=빨간 경고+확인 버튼 / 확인됨=차분 배너.
@@ -283,11 +282,10 @@ function DetailContent({
             {p.registration_number}
           </div>
         </div>
-        {/* 현재 단계: 타임라인 그래픽(4.1) 대신 텍스트 배지만 */}
-        <span className="shrink-0 rounded-full bg-accent-primary/10 px-3 py-1 text-caption font-semibold text-accent-primary">
-          {p.current_stage}
-        </span>
       </div>
+
+      {/* 환자 단계 타임라인(Story 4.1) — 접수→진료→검사→수납 진행 현황 */}
+      <StageTimeline currentStage={p.current_stage} />
 
       {/* 필수 절차 체크리스트(Story 3.4) — 전부 체크해야 "다음 단계로" 활성화 */}
       <ProcedureChecklist
@@ -326,23 +324,28 @@ function DetailContent({
         )}
       </InfoCard>
 
-      {/* 투약 */}
+      {/* 투약 — 각 약마다 수정/삭제 버튼(잘못 입력 정정) */}
       <InfoCard title="투약" icon="medication">
-        {medications.length === 0 ? (
-          <EmptyRow />
-        ) : (
-          medications.map((m, i) => (
-            <Row
-              key={i}
-              k={`${m.drug_name}${m.dose ? ` ${m.dose}` : ""}`}
-              v={m.schedule || "—"}
-            />
-          ))
-        )}
+        <MedicationList
+          patientId={p.id}
+          medications={medications}
+          onEdit={setEditingMed}
+          onSaved={onSaved}
+        />
       </InfoCard>
 
-      {/* 처방 입력 (Story 3.1) — 알레르기/금기 충돌 시 경고 팝업 */}
-      <PrescribeForm patientId={p.id} onSaved={onSaved} />
+      {/* 처방 입력/수정 (Story 3.1) — 알레르기/금기 충돌 시 경고 팝업.
+          editingMed가 바뀔 때 key로 폼을 리마운트해 입력칸을 그 약 값으로 채운다. */}
+      <PrescribeForm
+        key={editingMed ? `edit-${editingMed.id}` : "new"}
+        patientId={p.id}
+        editing={editingMed}
+        onCancelEdit={() => setEditingMed(null)}
+        onSaved={() => {
+          setEditingMed(null); // 수정 저장 후 추가 모드로 복귀
+          onSaved();
+        }}
+      />
 
       {/* 검사결과 */}
       <InfoCard title="검사결과" icon="science">
@@ -373,6 +376,13 @@ function DetailContent({
           ))
         )}
       </InfoCard>
+
+      {/* 부서 간 인계 메모(Story 4.2) — 이전 부서가 남긴 메모 표시 + 내 메모 작성 */}
+      <HandoverNoteSection
+        patientId={p.id}
+        notes={bundle.handover_notes ?? []}
+        onSaved={onSaved}
+      />
 
       {/* 수납 */}
       <InfoCard title="수납" icon="receipt_long">

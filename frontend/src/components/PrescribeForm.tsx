@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
+import type { MedicationItem } from "@/components/MedicationList";
 
 // 409 응답(detail) 안에 담겨 오는 충돌 정보
 type ConflictInfo = {
@@ -26,15 +27,22 @@ type Payload = { drug_name: string; dose: string; schedule: string };
 
 export function PrescribeForm({
   patientId,
+  editing,
   onSaved,
+  onCancelEdit,
 }: {
   patientId: number;
+  // editing이 있으면 '수정 모드'(그 약을 PATCH). 없으면 '추가 모드'(POST).
+  // 부모가 editing 대상이 바뀔 때 key로 이 컴포넌트를 리마운트 → 초기값이 editing에서 채워진다.
+  editing?: MedicationItem | null;
   onSaved?: () => void;
+  onCancelEdit?: () => void;
 }) {
   const router = useRouter();
-  const [drugName, setDrugName] = useState("");
-  const [dose, setDose] = useState("");
-  const [schedule, setSchedule] = useState("");
+  const isEditing = !!editing;
+  const [drugName, setDrugName] = useState(editing?.drug_name ?? "");
+  const [dose, setDose] = useState(editing?.dose ?? "");
+  const [schedule, setSchedule] = useState(editing?.schedule ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 충돌 정보가 있으면 경고 팝업을 띄운다(null이면 팝업 닫힘)
@@ -55,8 +63,12 @@ export function PrescribeForm({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/patients/${patientId}/medications`, {
-        method: "POST",
+      // 수정 모드면 그 약을 PATCH, 추가 모드면 새로 POST(둘 다 알레르기 409 흐름 동일)
+      const url = isEditing
+        ? `${API_BASE}/api/patients/${patientId}/medications/${editing!.id}`
+        : `${API_BASE}/api/patients/${patientId}/medications`;
+      const res = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify({ ...payload, acknowledged }),
       });
@@ -109,7 +121,7 @@ export function PrescribeForm({
   return (
     <section className="rounded-lg border border-border-subtle bg-bg-surface p-4">
       <h2 className="mb-3 text-caption font-semibold uppercase tracking-wide text-text-secondary">
-        처방 입력
+        {isEditing ? "처방 수정" : "처방 입력"}
       </h2>
 
       <form
@@ -156,13 +168,24 @@ export function PrescribeForm({
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="h-11 rounded-lg bg-accent-primary px-4 text-base font-semibold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {submitting ? "처리 중…" : "처방 추가"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="h-11 flex-1 rounded-lg bg-accent-primary px-4 text-base font-semibold text-accent-on transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? "처리 중…" : isEditing ? "수정 저장" : "처방 추가"}
+          </button>
+          {isEditing && (
+            <button
+              type="button"
+              onClick={() => onCancelEdit?.()}
+              className="h-11 rounded-lg border border-border-subtle px-5 text-base font-medium text-text-secondary transition-colors hover:bg-bg-elevated"
+            >
+              취소
+            </button>
+          )}
+        </div>
       </form>
 
       {/* 알레르기/금기 경고 팝업 — 충돌이 있을 때만. 확인 전까지 진행 불가. */}

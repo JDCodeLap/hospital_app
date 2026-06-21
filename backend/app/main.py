@@ -7,7 +7,7 @@
 
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import (
     Depends,
@@ -30,11 +30,13 @@ from .models import (
     Billing,
     ChecklistCheck,
     Diagnosis,
+    HandoverNote,
     LabResult,
     Medication,
     MedicationAdministration,
     Patient,
     SafetyAck,
+    StageEntry,
     Staff,
     TestItem,
     Visit,
@@ -44,6 +46,7 @@ from .safety import check_contraindications
 from .security import (
     authenticate_ws_token,
     create_access_token,
+    get_current_admin,
     get_current_user,
     hash_password,
     verify_password,
@@ -81,6 +84,43 @@ class ChecklistToggleIn(BaseModel):
     checked: bool
 
 
+class HandoverNoteIn(BaseModel):
+    """부서 간 인계 메모 작성 요청 본문(Story 4.2, FR8). 내용만 받는다.
+
+    from_stage(작성 시점의 단계)는 클라이언트가 보내지 않고 서버가 자동 기록한다(조작 방지).
+    """
+
+    note: str
+
+
+class StaffCreateIn(BaseModel):
+    """직원 등록 요청 본문(Story 5.2, FR11)."""
+
+    username: str
+    password: str
+    full_name: str = ""
+    role: str = "staff"
+    job_title: str = ""
+
+
+class StaffUpdateIn(BaseModel):
+    """직원 수정 요청 본문(Story 5.2). 부분 수정 — 보낸 필드만 변경한다.
+
+    password는 None/빈 값이면 기존 비밀번호를 그대로 유지한다(빈 해시 덮어쓰기 방지).
+    """
+
+    full_name: str | None = None
+    role: str | None = None
+    job_title: str | None = None
+    is_active: bool | None = None
+    password: str | None = None
+
+
+# 인계 메모 길이 상한(Story 4.2). 메모는 모든 조회 묶음·broadcast에 실려 나가므로
+# 무한 길이 입력이 응답을 비대화하지 않도록 서버에서 상한을 강제(빈 메모 422와 같은 게이트).
+HANDOVER_NOTE_MAX_LEN = 2000
+
+
 # 필수 절차 체크리스트의 표준 항목(Story 3.4, FR6).
 # 항목 추가/편집은 관리자 기능(Epic 5) — 지금은 백엔드 상수 단일 세트.
 CHECKLIST_ITEMS = [
@@ -93,6 +133,66 @@ CHECKLIST_KEYS = {item["key"] for item in CHECKLIST_ITEMS}
 # 환자 진행 단계 순서(접수→진료→검사→수납). "다음 단계로"는 이 순서로 이동.
 STAGE_ORDER = ["접수", "진료", "검사", "수납"]
 
+# 한 단계에 이 분(分) 이상 머물면 '대기 초과'로 판정(Story 4.4, FR10).
+# 관리자가 직접 바꾸는 기능(FR14)은 Story 5.5 — 지금은 백엔드 상수 단일 기준.
+STAGE_OVERDUE_MINUTES = 30
+
+
+# 권한(role)은 2단계만 — 관리자 페이지 접근 여부(Story 5.2). 세분화 권한은 Story 5.3.
+VALID_ROLES = {"admin", "staff"}
+# 직군(job_title)은 분류·표시용(권한과 무관). 자유 입력 대신 권장 목록을 둔다("기타"로 여유).
+JOB_TITLES = ["의사", "간호사", "원무과", "기타"]
+
+
+def normalize_role(raw: str) -> str:
+    """권한 표기를 정규화(Story 5.2). 'admin'/'staff'만 허용, 그 외는 422.
+
+    5.1에서 미뤄둔 항목 이행: 관리자가 역할을 편집하므로 ' Admin'·'ADMIN' 같은 입력이
+    조용히 권한 미부여(메뉴/게이트 불일치)를 일으키지 않도록 strip().lower()로 정규화한다.
+    프론트(=== "admin")·백엔드(get_current_admin)·DB 값이 항상 일치하게 만든다.
+    """
+    role = (raw or "").strip().lower()
+    if role not in VALID_ROLES:
+        raise HTTPException(
+            status_code=422, detail="권한은 admin 또는 staff만 가능합니다"
+        )
+    return role
+
+
+def staff_public(s: Staff) -> dict[str, object]:
+    """직원 1명을 화면용으로 직렬화(Story 5.2). 비밀번호 해시는 절대 포함하지 않는다.
+
+    응답 직렬화를 이 한 곳으로 모아 'hashed_password 노출' 실수를 원천 차단한다(NFR3).
+    """
+    return {
+        "id": s.id,
+        "username": s.username,
+        "full_name": s.full_name,
+        "role": s.role,
+        "job_title": s.job_title,
+        "is_active": s.is_active,
+    }
+
+
+def assert_not_last_admin(session: Session, target: Staff) -> None:
+    """대상이 '활성 관리자'인데 그가 마지막 1명이면 강등/삭제/비활성화를 막는다(Story 5.2).
+
+    관리자가 0명이 되면 누구도 /admin에 못 들어가는 영구 잠금(self-lockout)이 되므로,
+    활성 admin 수가 1명 이하일 때 마지막 관리자에 대한 그런 변경을 409로 거부한다.
+    """
+    if target.role == "admin" and target.is_active:
+        active_admins = session.exec(
+            select(Staff).where(
+                Staff.role == "admin",
+                Staff.is_active == True,  # noqa: E712 (SQL 비교 — `is True` 아님)
+            )
+        ).all()
+        if len(active_admins) <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="마지막 관리자는 강등·삭제·비활성화할 수 없습니다",
+            )
+
 
 def next_stage(stage: str) -> str | None:
     """현재 단계의 다음 단계를 반환. 마지막(수납)이거나 알 수 없는 값이면 None."""
@@ -101,6 +201,22 @@ def next_stage(stage: str) -> str | None:
         if idx + 1 < len(STAGE_ORDER):
             return STAGE_ORDER[idx + 1]
     return None
+
+
+def stage_wait_info(
+    entered_at: datetime | None, now: datetime
+) -> tuple[int | None, bool]:
+    """현재 단계 진입 시각 → (대기 분, 대기초과 여부)(Story 4.4).
+
+    진입 기록이 없으면 (None, False). 음수(시계 역행)는 0으로 보정.
+    기준(STAGE_OVERDUE_MINUTES) 이상이면 대기 초과(True).
+    """
+    if entered_at is None:
+        return None, False
+    minutes = int((now - entered_at).total_seconds() // 60)
+    if minutes < 0:
+        minutes = 0
+    return minutes, minutes >= STAGE_OVERDUE_MINUTES
 
 
 # 투약 시간 문자열에서 유효한 "HH:MM"만 골라내는 정규식(00:00~23:59)
@@ -284,12 +400,56 @@ def seed_patients(session: Session) -> None:
     session.commit()  # 모든 환자+자식을 한 번에 커밋(원자성)
 
 
+# 기존 환자 백필용 진입 시각 오프셋(분). 데모 가시성을 위해 분산 →
+# 30분 기준으로 일부(50·40·35·70·45 = 5명)가 즉시 '대기 초과'로 보이게.
+_BACKFILL_OFFSETS_MIN = [50, 5, 40, 10, 35, 70, 20, 45]
+
+
+def backfill_stage_entries(session: Session) -> None:
+    """진입 기록이 없는 환자에 StageEntry를 1건씩 채운다(Story 4.4, 멱등).
+
+    이 기능 이후 advance한 환자에게만 진입 시각이 생기므로, 이미 시드된 환자는
+    여기서 채운다. 데모로 일부가 대기 초과로 보이도록 entered_at을 과거로 분산한다.
+    이미 기록이 있는 환자는 건너뛴다 → 서버를 재시작해도 시각이 다시 바뀌지 않음.
+    """
+    now = datetime.now()
+    existing = {e.patient_id for e in session.exec(select(StageEntry)).all()}
+    patients = session.exec(select(Patient).order_by(Patient.id)).all()
+    added = False
+    for i, p in enumerate(patients):
+        if p.id in existing:
+            continue  # 이미 기록 있음 → 건너뜀(멱등)
+        offset = _BACKFILL_OFFSETS_MIN[i % len(_BACKFILL_OFFSETS_MIN)]
+        session.add(
+            StageEntry(
+                patient_id=p.id,
+                stage=p.current_stage,
+                entered_at=now - timedelta(minutes=offset),
+            )
+        )
+        added = True
+    if added:
+        session.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 서버 시작 시: 테이블 생성 + 비어 있으면 테스트/계정 샘플 시드
     try:
         init_db()
         with Session(engine) as session:
+            # 기존 staff 테이블에 job_title(직군) 컬럼 보강(Story 5.2) — 멱등.
+            # create_all은 없는 테이블만 만들고 기존 테이블에 컬럼을 ALTER하지 못한다(1-2 deferred).
+            # 직군은 Staff의 1:1 속성이라 새 테이블로 우회하지 않고 컬럼을 더한다.
+            # Postgres ADD COLUMN IF NOT EXISTS는 멱등 → 재시작·기존 DB 모두 안전, 데이터 보존.
+            # (빈 DB라면 create_all이 이미 컬럼을 포함해 만들었으므로 IF NOT EXISTS가 건너뛴다.)
+            session.execute(
+                text(
+                    "ALTER TABLE staff "
+                    "ADD COLUMN IF NOT EXISTS job_title VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
+            session.commit()
             # 연결 증명용 테스트 데이터(1.2)
             if session.exec(select(TestItem)).first() is None:
                 session.add_all(
@@ -311,8 +471,40 @@ async def lifespan(app: FastAPI):
                     )
                 )
                 session.commit()
+            # 관리자 계정(5.1) — username으로 존재 확인 후 없으면 생성(멱등).
+            # 위 "비었을 때만" 분기는 이미 nurse1이 있으면 안 타므로 별도 블록이 필요하다.
+            if (
+                session.exec(
+                    select(Staff).where(Staff.username == "admin1")
+                ).first()
+                is None
+            ):
+                session.add(
+                    Staff(
+                        username="admin1",
+                        hashed_password=hash_password("admin1234"),
+                        full_name="관리자",
+                        role="admin",
+                    )
+                )
+                session.commit()
+            # 시드 계정 직군 백필(5.2, 멱등) — 직군이 비어 있을 때만 채운다(데모 가시성).
+            _seed_job_titles = {"nurse1": "간호사", "admin1": "원무과"}
+            _jt_changed = False
+            for _uname, _jt in _seed_job_titles.items():
+                _s = session.exec(
+                    select(Staff).where(Staff.username == _uname)
+                ).first()
+                if _s is not None and not _s.job_title:
+                    _s.job_title = _jt
+                    session.add(_s)
+                    _jt_changed = True
+            if _jt_changed:
+                session.commit()
             # 샘플 환자 데이터(2.1) — 비어 있을 때만
             seed_patients(session)
+            # 환자 단계 진입 시각 백필(4.4) — 기록 없는 환자만(멱등)
+            backfill_stage_entries(session)
     except OperationalError as exc:
         # DB가 꺼져 있을 때 알 수 없는 스택트레이스 대신 친절한 안내 후 시작 중단
         raise RuntimeError(
@@ -389,6 +581,139 @@ def me(current: Staff = Depends(get_current_user)) -> dict[str, object]:
     }
 
 
+@app.get("/api/admin/overview")
+def admin_overview(
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2) — 일반 직원은 403
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """관리자 페이지 랜딩용 최소 요약(Story 5.1). 전체 직원 수·환자 수.
+
+    이 엔드포인트의 목적은 ①관리자 게이트(get_current_admin) 증명 ②랜딩의 최소 콘텐츠.
+    오늘 환자 수·과별 혼잡도·평균 대기시간 등 본격 대시보드는 Story 5.4(FR13).
+    """
+    staff_count = len(session.exec(select(Staff)).all())
+    patient_count = len(session.exec(select(Patient)).all())
+    return {"staff_count": staff_count, "patient_count": patient_count}
+
+
+@app.get("/api/admin/staff")
+def list_staff(
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2)
+    session: Session = Depends(get_session),
+) -> list[dict[str, object]]:
+    """직원 목록(Story 5.2, FR11). 비밀번호 해시는 노출하지 않는다(staff_public)."""
+    rows = session.exec(select(Staff).order_by(Staff.username)).all()
+    return [staff_public(s) for s in rows]
+
+
+@app.post("/api/admin/staff")
+def create_staff(
+    payload: StaffCreateIn,
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """직원 등록(Story 5.2). 아이디 중복 409, 빈 아이디/비번 422, 권한 정규화."""
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=422, detail="아이디를 입력하세요")
+    if not payload.password.strip():
+        raise HTTPException(status_code=422, detail="비밀번호를 입력하세요")
+    role = normalize_role(payload.role)
+
+    # 사전 중복 확인(친절한 메시지) + IntegrityError 폴백(동시 등록 경합 안전)
+    if session.exec(
+        select(Staff).where(Staff.username == username)
+    ).first() is not None:
+        raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다")
+
+    staff = Staff(
+        username=username,
+        hashed_password=hash_password(payload.password),  # 1.3 해시 재사용(평문 금지)
+        full_name=payload.full_name.strip(),
+        role=role,
+        job_title=payload.job_title.strip(),
+        is_active=True,
+    )
+    session.add(staff)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다")
+    session.refresh(staff)
+    return staff_public(staff)
+
+
+@app.patch("/api/admin/staff/{staff_id}")
+def update_staff(
+    staff_id: int,
+    payload: StaffUpdateIn,
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """직원 수정(Story 5.2). 보낸 필드만 변경. 비번은 새 값일 때만 교체(빈 값=유지).
+
+    마지막 관리자를 강등(admin→staff)하거나 비활성화하려 하면 거부(self-lockout 방지).
+    """
+    staff = session.get(Staff, staff_id)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="직원을 찾을 수 없습니다")
+
+    # 마지막 관리자 보호: '관리자에서 빠지는' 변경(강등/비활성화)이면 먼저 검사
+    new_role = normalize_role(payload.role) if payload.role is not None else staff.role
+    demoting = staff.role == "admin" and new_role != "admin"
+    deactivating = payload.is_active is False and staff.is_active
+    if demoting or deactivating:
+        assert_not_last_admin(session, staff)
+
+    if payload.full_name is not None:
+        staff.full_name = payload.full_name.strip()
+    if payload.job_title is not None:
+        staff.job_title = payload.job_title.strip()
+    if payload.role is not None:
+        staff.role = new_role
+    if payload.is_active is not None:
+        staff.is_active = payload.is_active
+    # 비밀번호는 새로 입력했을 때만 교체 — 빈 값/None이면 기존 해시 유지(빈 해시 덮어쓰기 방지)
+    if payload.password is not None and payload.password.strip():
+        staff.hashed_password = hash_password(payload.password)
+
+    session.add(staff)
+    session.commit()
+    session.refresh(staff)
+    return staff_public(staff)
+
+
+@app.delete("/api/admin/staff/{staff_id}")
+def delete_staff(
+    staff_id: int,
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """직원 삭제(Story 5.2). 자기 자신·마지막 관리자 보호. 활동 기록 있으면 비활성화 안내.
+
+    하드 삭제를 시도하되, 이 직원이 남긴 기록(SafetyAck/투약완료/체크/인계메모의 FK)이 있으면
+    IntegrityError → 409로 "비활성화하세요" 안내(is_active=False면 토큰이 거부되어 로그인 차단).
+    """
+    staff = session.get(Staff, staff_id)
+    if staff is None:
+        raise HTTPException(status_code=404, detail="직원을 찾을 수 없습니다")
+    if staff.id == current.id:
+        raise HTTPException(status_code=409, detail="자기 계정은 삭제할 수 없습니다")
+    assert_not_last_admin(session, staff)  # 대상이 마지막 관리자면 막음
+
+    session.delete(staff)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="이 직원은 활동 기록이 있어 삭제할 수 없습니다. 대신 비활성화하세요.",
+        )
+    return {"deleted": staff_id}
+
+
 @app.get("/api/patients")
 def list_patients(
     q: str | None = None,  # 검색어(선택): 이름 또는 등록번호 부분일치. 비면 전체 목록(2.2)
@@ -410,18 +735,29 @@ def list_patients(
             )
         )
     patients = session.exec(stmt.order_by(Patient.registration_number)).all()
-    return [
-        {
-            "id": p.id,
-            "registration_number": p.registration_number,
-            "name": p.name,
-            "age": calc_age(p.birth_date),
-            "gender": p.gender,
-            "current_stage": p.current_stage,
-            "allergies": p.allergies or "",  # null 방어(프론트 카드 배지 안전) + 하위호환
-        }
-        for p in patients
-    ]
+    # 대기 시간(4.4): 전 환자의 단계 진입 시각을 한 번에 조회해 맵으로(N+1 방지).
+    now = datetime.now()
+    entered_map = {
+        e.patient_id: e.entered_at
+        for e in session.exec(select(StageEntry)).all()
+    }
+    result = []
+    for p in patients:
+        waiting_minutes, is_overdue = stage_wait_info(entered_map.get(p.id), now)
+        result.append(
+            {
+                "id": p.id,
+                "registration_number": p.registration_number,
+                "name": p.name,
+                "age": calc_age(p.birth_date),
+                "gender": p.gender,
+                "current_stage": p.current_stage,
+                "allergies": p.allergies or "",  # null 방어(프론트 카드 배지 안전) + 하위호환
+                "waiting_minutes": waiting_minutes,  # 4.4: 현재 단계 대기 분(기록 없으면 null)
+                "is_overdue": is_overdue,  # 4.4: 기준 초과 여부
+            }
+        )
+    return result
 
 
 @app.get("/api/patients/{patient_id}")
@@ -475,6 +811,30 @@ def get_patient(
         "next_stage": next_stage(patient.current_stage),
     }
 
+    # 부서 간 인계 메모(4.2): 최신 5건(작성자 이름 포함). 메모가 없으면 빈 목록.
+    # 정렬은 created_at 내림차순 + id 내림차순(보조키) — 같은 시각(동틱)에 저장된 메모도
+    # 결정적 순서로 최신이 위에 오게(AC1·AC5 "새 메모 최상단"). id가 클수록 나중에 저장됨.
+    notes_raw = list(
+        session.exec(
+            select(HandoverNote)
+            .where(HandoverNote.patient_id == patient_id)
+            .order_by(col(HandoverNote.created_at).desc(), col(HandoverNote.id).desc())
+            .limit(5)
+        ).all()
+    )
+    handover_notes = []
+    for n in notes_raw:
+        author = session.get(Staff, n.author_id)
+        handover_notes.append(
+            {
+                "id": n.id,
+                "from_stage": n.from_stage,
+                "note": n.note,
+                "author_name": author.full_name if author else "",
+                "created_at": n.created_at.isoformat(),
+            }
+        )
+
     return {
         "patient": {
             "id": patient.id,
@@ -493,6 +853,7 @@ def get_patient(
         "billings": by_pid(Billing),
         "safety_ack": safety_ack,  # 3.2: 미확인=None / 확인됨=확인자·시각
         "checklist": checklist,  # 3.4: 필수 절차 항목·전체체크여부·다음단계
+        "handover_notes": handover_notes,  # 4.2: 부서 간 인계 메모 최신 5건
     }
 
 
@@ -580,6 +941,83 @@ async def add_medication(
         "patient_id": patient_id,
         "drug_name": medication.drug_name,
     }
+
+
+@app.patch("/api/patients/{patient_id}/medications/{medication_id}")
+async def update_medication(
+    patient_id: int,
+    medication_id: int,
+    payload: MedicationIn,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """처방 1건 수정 — 잘못 입력한 처방 정정용.
+
+    약 이름을 바꾸면 알레르기/금기를 다시 검사한다(추가와 똑같은 409 흐름) →
+    위험한 약으로 고치려 하면 확인 전까지 저장 거부. 저장 후 broadcast로 화면 자동 갱신.
+    """
+    patient = session.get(Patient, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="환자를 찾을 수 없습니다")
+    med = session.get(Medication, medication_id)
+    if med is None or med.patient_id != patient_id:
+        raise HTTPException(status_code=404, detail="투약 정보를 찾을 수 없습니다")
+
+    drug_name = payload.drug_name.strip()
+    if not drug_name:
+        raise HTTPException(status_code=422, detail="약 이름을 입력하세요")
+
+    conflicts = check_contraindications(patient.allergies or "", drug_name)
+    if conflicts and not payload.acknowledged:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "conflicts": conflicts,
+                "drug_name": drug_name,
+                "message": f"이 환자는 {', '.join(conflicts)} 알레르기입니다",
+            },
+        )
+
+    med.drug_name = drug_name
+    med.dose = payload.dose.strip()
+    med.schedule = payload.schedule.strip()
+    session.add(med)
+    session.commit()
+    session.refresh(med)
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {"id": med.id, "patient_id": patient_id, "drug_name": med.drug_name}
+
+
+@app.delete("/api/patients/{patient_id}/medications/{medication_id}")
+async def delete_medication(
+    patient_id: int,
+    medication_id: int,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """처방 1건 삭제 — 잘못 입력한 처방 정정용.
+
+    이미 '투약 완료' 기록이 있는 약은 보호한다(FK IntegrityError → 409 안내) →
+    실제로 준 약이 흔적 없이 사라지지 않게. 방금 잘못 넣은(완료 기록 없는) 약은 바로 삭제됨.
+    """
+    med = session.get(Medication, medication_id)
+    if med is None or med.patient_id != patient_id:
+        raise HTTPException(status_code=404, detail="투약 정보를 찾을 수 없습니다")
+    session.delete(med)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="이미 투약 완료 기록이 있어 삭제할 수 없습니다.",
+        )
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {"deleted": medication_id}
 
 
 @app.get("/api/medication-alerts")
@@ -837,11 +1275,122 @@ async def advance_stage(
     ).all():
         session.delete(row)
     session.add(patient)
+
+    # 단계 진입 시각 갱신(4.4): 새 단계에 '지금' 들어왔으므로 대기 시계 리셋(upsert).
+    entry = session.exec(
+        select(StageEntry).where(StageEntry.patient_id == patient_id)
+    ).first()
+    if entry is None:
+        session.add(
+            StageEntry(patient_id=patient_id, stage=nxt, entered_at=datetime.now())
+        )
+    else:
+        entry.stage = nxt
+        entry.entered_at = datetime.now()
+        session.add(entry)
+
     session.commit()
     await manager.broadcast(
         patient_id, {"type": "patient_updated", "patient_id": patient_id}
     )
     return {"patient_id": patient_id, "current_stage": nxt}
+
+
+@app.post("/api/patients/{patient_id}/handover-note")
+async def add_handover_note(
+    patient_id: int,
+    payload: HandoverNoteIn,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """부서 간 인계 메모를 남긴다(Story 4.2, FR8).
+
+    - from_stage는 서버가 patient.current_stage를 읽어 자동 기록 → 클라이언트가 조작 못 함.
+    - 빈 메모(공백만)는 422로 거부(프론트 비활성에만 의존하지 않고 서버에서도 막는다).
+    - 저장 후 broadcast → 같은 환자 화면을 보는 다른 클라이언트도 새 메모를 즉시 본다(자동 전달).
+    - 메모는 append-only(삭제·수정 없음, 감사 추적).
+    """
+    patient = session.get(Patient, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="환자를 찾을 수 없습니다")
+
+    note_text = payload.note.strip()
+    if not note_text:
+        raise HTTPException(status_code=422, detail="메모 내용을 입력하세요")
+    if len(note_text) > HANDOVER_NOTE_MAX_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"메모는 {HANDOVER_NOTE_MAX_LEN}자 이하여야 합니다",
+        )
+
+    note = HandoverNote(
+        patient_id=patient_id,
+        from_stage=patient.current_stage,  # 작성 시점의 단계를 서버가 자동 기록
+        note=note_text,
+        author_id=current.id,
+        created_at=datetime.now(),
+    )
+    session.add(note)
+    session.commit()
+    session.refresh(note)
+    # 같은 환자 화면을 보고 있는 다른 클라이언트도 새 메모로 갱신
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {"id": note.id, "patient_id": patient_id}
+
+
+@app.patch("/api/patients/{patient_id}/handover-note/{note_id}")
+async def update_handover_note(
+    patient_id: int,
+    note_id: int,
+    payload: HandoverNoteIn,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """인계 메모 1건 수정 — 잘못 입력한 메모 정정용(빈 메모/길이 상한은 작성과 동일 검증).
+
+    from_stage·작성자·작성 시각은 그대로 두고 내용만 고친다. 저장 후 broadcast로 화면 갱신.
+    """
+    note = session.get(HandoverNote, note_id)
+    if note is None or note.patient_id != patient_id:
+        raise HTTPException(status_code=404, detail="메모를 찾을 수 없습니다")
+
+    note_text = payload.note.strip()
+    if not note_text:
+        raise HTTPException(status_code=422, detail="메모 내용을 입력하세요")
+    if len(note_text) > HANDOVER_NOTE_MAX_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"메모는 {HANDOVER_NOTE_MAX_LEN}자 이하여야 합니다",
+        )
+
+    note.note = note_text
+    session.add(note)
+    session.commit()
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {"id": note.id, "patient_id": patient_id}
+
+
+@app.delete("/api/patients/{patient_id}/handover-note/{note_id}")
+async def delete_handover_note(
+    patient_id: int,
+    note_id: int,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """인계 메모 1건 삭제 — 잘못 입력한 메모 정정용. 저장 후 broadcast로 화면 갱신."""
+    note = session.get(HandoverNote, note_id)
+    if note is None or note.patient_id != patient_id:
+        raise HTTPException(status_code=404, detail="메모를 찾을 수 없습니다")
+    session.delete(note)
+    session.commit()
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {"deleted": note_id}
 
 
 @app.websocket("/ws/patients/{patient_id}")

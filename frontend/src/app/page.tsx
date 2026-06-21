@@ -28,6 +28,12 @@ export default function Home() {
             desc="이름·등록번호로 환자를 찾고 통합 정보를 봅니다."
           />
           <QuickCard
+            href="/board"
+            icon="view_kanban"
+            title="환자 흐름판"
+            desc="모든 환자가 지금 어느 단계인지 한눈에 봅니다."
+          />
+          <QuickCard
             href="/alerts"
             icon="notifications"
             title="투약 시간 알림"
