@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-20
-last_updated: 2026-06-22 # Story 5.5 작성 완료 → ready-for-dev
+last_updated: 2026-06-22 # Epic 4 회고 완료
 project: hospital-app
 project_key: NOKEY
 tracking_system: file-system
@@ -72,7 +72,7 @@ development_status:
   4-2-부서-간-자동-전달: done
   4-3-환자-흐름판-전체-현황: done
   4-4-대기-초과-알림: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   # ===== Epic 5: 관리자 페이지 =====
   epic-5: in-progress
