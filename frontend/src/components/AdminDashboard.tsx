@@ -100,16 +100,21 @@ export function AdminDashboard() {
       )}
 
       {/* 요약 숫자 카드 */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard
-          icon="today"
-          label="오늘 방문 환자"
-          value={loading || error ? "—" : `${data?.today_patient_count ?? 0}명`}
-        />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           icon="groups"
           label="전체 환자"
           value={loading || error ? "—" : `${data?.patient_count ?? 0}명`}
+        />
+        <StatCard
+          icon="badge"
+          label="전체 직원"
+          value={loading || error ? "—" : `${data?.staff_count ?? 0}명`}
+        />
+        <StatCard
+          icon="today"
+          label="오늘 방문 환자"
+          value={loading || error ? "—" : `${data?.today_patient_count ?? 0}명`}
         />
         <StatCard
           icon="schedule"

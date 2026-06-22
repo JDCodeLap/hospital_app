@@ -125,3 +125,9 @@
 - 404→403 순서로 인한 medication id 존재 탐지(minor): `update_medication`/`delete_medication`이 자원 404 체크를 `require_section`보다 먼저 수행 → 투약 영역 권한 없는 직원이 PATCH/DELETE 시 404(없는 id)/403(있는 id)로 medication id 존재 여부를 추정할 수 있음. 인가를 존재 확인보다 앞에 두면 차단(require_section을 session.get 앞으로). 정보 가치 낮아 defer. (backend/app/main.py)
 - 프론트 visible_sections 미전송 시 전체 허용 fallback: `PatientDetail`의 `bundle.visible_sections ?? [전체]`가 구버전/누락 응답을 전체 허용으로 간주(fail-open). 백엔드가 범위 밖 키를 응답에서 빼므로 **실제 데이터 누출은 없고 표시 결정만** 영향. 배포·캐시 단계에서 응답에 항상 visible_sections가 포함되는지 점검. (frontend/src/components/PatientDetail.tsx)
 - BE/FE 정보영역 정의 이중화: 백엔드 `ACCESS_SECTIONS`(key·label·bundle)와 프론트 `SECTIONS`(key·label)가 수작업으로 중복 정의됨 → 영역 추가/이름변경 시 양쪽 + `vis.includes` 매핑을 동시에 고쳐야 하며 누락 시 게이트가 조용히 어긋남. 향후 영역 편집 기능(Epic 5 연장) 도입 시 단일 소스(예: 백엔드가 영역 메타를 내려주는 엔드포인트)로 단일화 검토. (backend/app/main.py, frontend/src/components/StaffManagement.tsx)
+
+## Deferred from: code review of story 5-4-전체-현황-대시보드 (2026-06-22)
+
+- naive datetime이 '오늘 방문' 경계와 평균 대기·초과 판정에 load-bearing: `admin_dashboard`가 `datetime.now()`(naive local)로 `day_start`를 만들고 `Visit.visited_at`/`StageEntry.entered_at`(둘 다 naive local로 저장)과 비교. 현재 writer들이 모두 naive local로 일관되어 정상 동작하나, 타임존/DST/일부 UTC 저장이 섞이면 '오늘' 윈도우·대기분이 어긋날 수 있음. 앱 전반 UTC aware로 통일 권장(기존 추적 항목의 새 인스턴스). (backend/app/main.py)
+- 수동 새로고침 set-state-after-unmount 가드 없음: 마운트 fetch는 AbortController로 보호되나, "새로고침" 버튼의 `void load()`는 signal 없이 호출 → 느린 네트워크에서 새로고침 직후 화면을 떠나면 언마운트 후 setState 발생 가능. React 19에선 해당 경고가 제거되어 실질 무해하나, 이전 스토리(4.3) 패턴(cancelled/abort 가드)과 일관성 위해 ref-held AbortController로 정리 가능. (frontend/src/components/AdminDashboard.tsx)
+- StageEntry 전체 로드(평균 대기 계산): `select(StageEntry).all()`로 전 행 적재(스펙이 환자당 1건·소규모라 허용). 규모 커지면 `AVG`·`COUNT(WHERE entered_at <= now - threshold)`로 SQL 집계 이관 검토. (backend/app/main.py)
