@@ -8,7 +8,7 @@ import { SchemaErd } from "@/components/SchemaErd";
 export default function SchemaPage() {
   return (
     <AuthGuard>
-      <AppShell>
+      <AppShell wide>
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-text-primary">
             데이터베이스 스키마 (ERD)

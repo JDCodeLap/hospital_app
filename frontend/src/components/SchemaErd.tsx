@@ -146,7 +146,12 @@ export function SchemaErd() {
           startOnLoad: false,
           theme: "dark", // 앱이 다크 모드라 다크 테마로 맞춤
           securityLevel: "strict", // SVG에 임의 스크립트 주입 방지
-          er: { useMaxWidth: false }, // 자연 크기로 그려 가로 스크롤로 보게(좁혀서 뭉개지지 않게)
+          er: {
+            useMaxWidth: true, // 화면 너비에 맞춰 스케일(가로 스크롤 없이)
+            // 좌→우 흐름: 부모(staff·patient) 옆에 자식 테이블들이 세로로 쌓여
+            // 다이어그램이 '세로로 길어짐' → 아래로 스크롤하며 크게 볼 수 있다.
+            layoutDirection: "LR",
+          },
         });
         // 고정 id로 1회 렌더 → SVG 문자열을 받아 직접 삽입
         const { svg } = await mermaid.render("hospital-erd", DEFINITION);
@@ -172,10 +177,11 @@ export function SchemaErd() {
   }
 
   return (
-    <div className="overflow-auto rounded-xl border border-border-subtle bg-bg-surface p-4">
-      {/* mermaid가 만든 SVG를 그대로 삽입(securityLevel:strict로 정화된 출력) */}
+    <div className="overflow-x-auto rounded-xl border border-border-subtle bg-bg-surface p-4">
+      {/* mermaid가 만든 SVG를 그대로 삽입(securityLevel:strict로 정화된 출력).
+          useMaxWidth:true와 맞춰 svg를 컨테이너 너비에 채운다(가로 스크롤 최소화). */}
       <div
-        className="[&_svg]:h-auto [&_svg]:max-w-none"
+        className="[&_svg]:h-auto [&_svg]:w-full"
         dangerouslySetInnerHTML={{ __html: state.svg }}
       />
     </div>

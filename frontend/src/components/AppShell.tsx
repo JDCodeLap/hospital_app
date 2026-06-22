@@ -34,7 +34,13 @@ const ADMIN_NAV = {
 // /api/auth/me 응답을 기다리는 최대 시간(ms). 넘기면 요청 포기(AuthGuard/AdminGuard와 동일).
 const ME_TIMEOUT_MS = 8000;
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  wide = false, // true면 본문을 넓게(스키마 ERD처럼 가로 공간이 필요한 화면)
+}: {
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
   const pathname = usePathname();
   // 현재 직원의 역할(/api/auth/me) — admin이면 관리자 메뉴를 추가로 보인다.
   // 실패/미확정 시 null → 메뉴 숨김(안전 기본값). 진짜 차단은 백엔드 get_current_admin.
@@ -119,7 +125,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         {/* ── 본문 ───────────────────────────── */}
-        <main className="mx-auto w-full max-w-5xl flex-1 p-4 pb-24 md:p-6 md:pb-6">
+        <main
+          className={
+            "mx-auto w-full flex-1 p-4 pb-24 md:p-6 md:pb-6 " +
+            (wide ? "max-w-none" : "max-w-5xl")
+          }
+        >
           {children}
         </main>
       </div>
