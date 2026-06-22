@@ -74,6 +74,37 @@
 
 ## 📝 작업 기록 (최신순)
 
+### 2026-06-22 — 📝 Story 5.3 작성 완료 (ready-for-dev) — 권한 설정 🔐 (FR12)
+- `bmad-create-story`로 **Story 5.3 (권한 설정, FR12)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/5-3-권한-설정.md`
+- ★ 핵심 설계 결정: FR12 "직원별 볼 수 있는 정보 범위"를 **"정보 영역(섹션) 단위 가시성"**으로 구현(행 단위 환자 필터 아님 — Patient에 담당 필드 없어 후속). 영역 5종=방문·진단·투약·검사·수납
+- 범위: ①백엔드 — `Staff.access_scope` 컬럼(멱등 ADD COLUMN, 5.2 패턴 / 기본 'all'=무회귀) + 상수/헬퍼(`ACCESS_SECTIONS`·`normalize_scope`(422)·`allowed_sections`·`require_section`) + **`get_patient`가 허용 영역만 반환**(진짜 자물쇠, `visible_sections` 동봉) + **투약·방문 쓰기 403 게이트** + `staff_public`/`StaffCreateIn`/`StaffUpdateIn`에 access_scope ②프론트 — `StaffManagement` 범위 편집 UI("전체 접근"+개별 체크)·배지 + `PatientDetail` 범위 밖 카드→`NoAccessCard`("권한 없음")·범위 밖 폼 숨김
+- ★ 3축 분리: role(접근 게이트)·job_title(분류)·**access_scope(정보 영역)** — 섞지 말 것 / 관리자는 scope 무관 전체 / 안전·협업(알레르기·체크리스트·인계메모)은 항상 표시(게이트 안 함) / **403≠401**(2-3 deferred "403→강제 로그아웃 재검토" 이행)
+- ★ 범위 밖: 환자 행 필터·알림/흐름판/대시보드 게이팅·감사로그 / 현황 대시보드=5.4 / 기준값=5.5
+- ⚠️ baseline_commit=0531e07이나 5.2 리뷰 패치+ERD가 아직 미커밋 상태(working tree) — 개발 전 커밋 권장
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 5.3 개발
+
+### 2026-06-22 — 🗺️ 사용자 요청 보완: DB 스키마 ERD 화면 추가 (까마귀발 표기법) — 정식 스토리 밖
+- 계기: 사용자가 "사이드탭에 DB 스키마를 ERD 까마귀발 표기법으로 보이게" 요청
+- 🖥️ 프론트(백엔드 변경 0): `components/SchemaErd.tsx`(NEW — Mermaid `erDiagram` 동적 import로 렌더, theme dark, `er.useMaxWidth:false`로 가로 스크롤) + `app/schema/page.tsx`(NEW — `<AuthGuard><AppShell>`, /schema 라우트, 정적 생성) + `AppShell.tsx`(NAV에 "스키마" 탭 추가, icon `schema`) + `package.json`(mermaid ^11 의존성 추가)
+- ★ ERD 정의는 **`models.py`를 손으로 미러링**(런타임 DB introspection 아님 — 백엔드/마이그레이션 0). 13개 테이블·FK 관계 전부 반영. 모델 바뀌면 `SchemaErd.tsx` 정의도 같이 갱신 필요(컴포넌트 주석에 명시)
+- ★ 비개발자 가독성: 테이블 제목 한글 별칭 `ENTITY["환자 (patient)"]` + 각 컬럼 한글 주석 + 관계선 한글 라벨. 특수문자(`/`·괄호)는 mermaid 주석 파싱 안전 위해 가운뎃점 `·`으로
+- 검증: `npm install`로 node_modules 복구 후 **lint(0 오류)·build(/schema 정적) PASS** + mermaid `parse()`로 정의 유효성 직접 확인(jsdom --no-save 임시 사용, 정리 완료)
+- ★ 미리보기: 백엔드 미설치(이 환경에 Python·PostgreSQL·.venv 없음 → 로그인 불가)라 `erd-preview.html`(루트, mermaid CDN, 서버/로그인 없이 열림)을 만들어 사용자가 직접 확인
+- ⚠️ 이 환경 상태 메모: node_modules·.venv 모두 비어 있었음. 프론트는 `npm install`로 복구함. 백엔드 런타임 검증은 불가했음(5.2 패치도 코드 검토로만 확인)
+
+### 2026-06-22 — 🔍 Story 5.2 코드 리뷰 완료 → done! 👥 (직원 계정 관리 + 보완작업)
+- 대상: **5.2(직원 계정 관리)** + 끼어든 보완작업(**처방·인계메모 수정·삭제**). 한 커밋(`0531e07`)에 Epic 4·5.1까지 섞여 있어 **in-scope 9개 파일만 추려 diff**(검사관에게 "Epic 4·5.1은 이미 done, 지적 말 것" 범위 못박음)
+- 검사관 3종 병렬(Blind·Edge·Acceptance) ✅ — **AC 1~8 전부 PASS, 치명적 결함 0**. 해시 미노출·관리자 게이트(403/401)·중복409·마지막관리자 보호·비번 빈값 유지·처방수정 시 알레르기 재검사·삭제 FK 보호 전부 코드로 확인
+- **patch 1건 적용**(decision-needed → YC 결정 "자기 비활성화만 막기"): `update_staff`에 **자기-비활성화 차단 409**(마지막-관리자 체크보다 앞 → 관리자 수 무관하게 차단, delete_staff 자기삭제 차단과 동일 취지). 자기 '강등'은 Dev Notes #3 의도대로 허용 유지. 프론트 `StaffManagement`에 `/api/auth/me`로 본인 id 받아 자기 행 "활성" 토글 잠금(보조 UX)
+  - ★ 발견 핵심: delete엔 자기-보호 가드가 있는데 update엔 없어, 관리자 2명↑일 때 자기 계정을 비활성화→자기 세션 즉시 잠김(self-lockout)
+- defer 4건 → `deferred-work.md`: ①마지막-관리자 가드 TOCTOU 경쟁(동시성, 단일워커 무해) ②직원 입력 길이상한 없음 ③비번 bcrypt 72바이트·raw/strip ④인계메모 수정/삭제 권한·감사추적 없음(설계변경 중복 환기)
+- dismiss 6건 기각: job_title enum 미강제(스펙 의도)·delete_medication 환자체크 생략(소유권 체크로 충분)·투약완료 FK(검증: RESTRICT→409 정상)·공백비번 무시(문서화)·get_current_admin 원시매칭(쓰기 전부 normalize)·PrescribeForm 수정모드 경고약 고정(검증: pending 재전송 정상)
+- 검증: 프론트 `npm install` 복구 후 **lint(0 오류)·build(통과, /admin/staff 정적) PASS**. ⚠️ **백엔드는 이 세션에 Python·PostgreSQL 미설치로 런타임 테스트 불가** → 4줄 가드라 코드 검토로 정확성 확인(추후 admin1로 빠른 수동 확인 권장)
+- 상태: **5-2 = done**
+- ▶▶ **다음: Story 5.3 (권한 설정, FR12)** → `bmad-create-story`
+  - 인계: 직원별 **정보 접근 범위**(어떤 환자/정보를 볼 수 있는가)를 `role`(admin/staff)·`job_title`(직군) 위에 더함. 2-3 deferred("403→강제 로그아웃 재검토")도 이때 처리(권한 밖 호출은 401 아닌 403). 직군을 권한 규칙 입력으로 쓸지 별도 권한 테이블 둘지 5.3에서 결정.
+
 ### 2026-06-21 — 🔧 사용자 요청 보완: 처방·인계메모 "수정·삭제" 추가 ✏️ (5.2 리뷰 대기 중 끼어든 작업)
 - 계기: 사용자가 "처방·인계메모를 잘못 추가하면 못 고친다"고 지적 → 확인 결과 사실(추가만 있고 수정/삭제 통로가 없었음). 사용자 선택 = **"수정·삭제 둘 다 추가"**
 - 🗄️ 백엔드(`main.py`): `PATCH·DELETE /api/patients/{id}/medications/{medId}` + `PATCH·DELETE /api/patients/{id}/handover-note/{noteId}` (전부 `get_current_user` 보호, 저장 후 `manager.broadcast`로 실시간 갱신)
