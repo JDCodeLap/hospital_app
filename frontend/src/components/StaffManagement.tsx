@@ -38,6 +38,9 @@ export function StaffManagement() {
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 현재 로그인한 관리자 본인 id — 자기 계정 비활성화 토글을 잠그는 UX 보조용
+  // (진짜 자물쇠는 백엔드 update_staff의 409. 여기서는 미리 못 끄게 막아 혼란 방지)
+  const [meId, setMeId] = useState<number | null>(null);
 
   // 폼 상태: editingId=null 이면 신규 등록, 숫자면 그 직원 수정
   const [formOpen, setFormOpen] = useState(false);
@@ -97,11 +100,27 @@ export function StaffManagement() {
     }
   }
 
+  // 본인 id 조회(/api/auth/me) — 자기 행 활성 토글 잠금에만 사용. 실패해도 화면은 정상(보조 정보).
+  async function loadMe(signal?: AbortSignal) {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { ...authHeader() },
+        signal,
+      });
+      if (!res.ok) return; // 인증 실패는 load()가 401/403로 처리. 여기선 조용히 무시.
+      const data = await res.json();
+      if (typeof data?.id === "number") setMeId(data.id);
+    } catch {
+      /* 본인 id를 못 얻어도 백엔드 409가 최종 방어선 */
+    }
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     // effect 본문에서 setState를 직접 호출하지 않도록 async 콜백으로 감싼다(2.4/4.3 교훈).
     void (async () => {
       await load(controller.signal);
+      await loadMe(controller.signal);
     })();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -356,17 +375,21 @@ export function StaffManagement() {
               </select>
             </label>
 
-            {/* 활성 여부 — 수정 시에만(신규는 항상 활성) */}
+            {/* 활성 여부 — 수정 시에만(신규는 항상 활성).
+                자기 계정은 비활성화 불가(self-lockout 방지) → 토글 잠금 + 안내. */}
             {editingId !== null && (
               <label className="flex items-center gap-2 sm:mt-7">
                 <input
                   type="checkbox"
                   checked={fActive}
+                  disabled={editingId === meId}
                   onChange={(e) => setFActive(e.target.checked)}
-                  className="h-5 w-5 accent-accent-primary"
+                  className="h-5 w-5 accent-accent-primary disabled:opacity-50"
                 />
                 <span className="text-sm text-text-secondary">
-                  활성 계정 (체크 해제 시 로그인 차단)
+                  {editingId === meId
+                    ? "활성 계정 (자기 계정은 비활성화할 수 없습니다)"
+                    : "활성 계정 (체크 해제 시 로그인 차단)"}
                 </span>
               </label>
             )}

@@ -663,6 +663,13 @@ def update_staff(
     new_role = normalize_role(payload.role) if payload.role is not None else staff.role
     demoting = staff.role == "admin" and new_role != "admin"
     deactivating = payload.is_active is False and staff.is_active
+    # 자기 비활성화 금지(self-lockout 방지): 비활성화하면 즉시 자기 토큰이 거부되어 자기 세션이
+    # 잠긴다. 자기 삭제 금지(delete_staff)와 같은 취지. 강등은 허용(다른 관리자가 되살릴 수 있음).
+    if deactivating and staff.id == current.id:
+        raise HTTPException(
+            status_code=409,
+            detail="자기 계정은 비활성화할 수 없습니다. 다른 관리자에게 요청하세요.",
+        )
     if demoting or deactivating:
         assert_not_last_admin(session, staff)
 
