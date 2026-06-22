@@ -1127,6 +1127,11 @@ def medication_alerts(
     현재 시각 기준으로 예정 시각이 지났고(오늘 분) 아직 완료 안 한 active 투약을
     전 환자에서 모아 반환한다. (진짜 예약 푸시가 아니라 화면이 열릴 때 서버가 계산하는 방식)
     """
+    # 5.3: 투약 영역 접근 권한이 없는 직원에겐 알림도 보이지 않는다(get_patient·투약 CRUD와 일관).
+    # 빈 목록 반환 → /alerts 화면은 투약 알림만 비고 대기초과(4.4) 등 다른 섹션은 그대로.
+    if "medications" not in allowed_sections(current):
+        return []
+
     now = datetime.now()
     today = now.date()
     current_hm = now.strftime("%H:%M")
@@ -1179,6 +1184,7 @@ async def administer_medication(
     med = session.get(Medication, medication_id)
     if med is None:
         raise HTTPException(status_code=404, detail="투약 정보를 찾을 수 없습니다")
+    require_section(current, "medications")  # 5.3: 투약 영역 권한 없으면 403
     if med.status != "active":
         # 중단/완료된 투약은 알림 대상이 아님 → 완료 처리도 막는다(GET 알림과 일관)
         raise HTTPException(status_code=400, detail="진행 중인 투약이 아닙니다")

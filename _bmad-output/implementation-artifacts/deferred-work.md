@@ -119,3 +119,9 @@
 - 직원 입력값 길이 상한 없음: `username`/`full_name`/`job_title`에 길이 상한이 없어(인계메모만 `HANDOVER_NOTE_MAX_LEN` 보유) 직접 API 호출 시 매우 긴 문자열 저장 가능. 관리자 전용·신뢰 입력이라 위험은 낮으나 일관성 위해 상한 권고. (backend/app/main.py create_staff/update_staff)
 - 직원 비밀번호 bcrypt 72바이트 절단·raw/strip 불일치: `create_staff`/`update_staff`가 비밀번호 공백 여부는 `strip()`으로 보되 실제 해시는 raw 값을 넣는다(공백 포함 가능). 또 bcrypt 72바이트 초과 시 조용히 절단. 1.3 로그인에서 긴 비번 안전처리한 것과 동일 계열의 신규 인스턴스(관리자 계정 생성 경로). 권한 민감 표면이라 환기. (backend/app/main.py create_staff/update_staff)
 - 인계메모 수정/삭제 권한·감사 추적 없음(중복 환기): `update/delete_handover_note`는 `get_current_user`만 요구하고 작성자 일치 체크가 없어 어느 직원이든 남의 메모를 고치거나 지울 수 있으며, 표시 작성자(author_id)·작성시각은 보존되어 "누가 내용을 바꿨는지" 흔적이 없다. 위 "사용자 요청 보완 — 처방·인계메모 수정/삭제" deferred와 동일 사안 — 운영 시 감사 로그/정정-기록 방식으로 재설계 권고. (backend/app/main.py update/delete_handover_note)
+
+## Deferred from: code review of story 5-3-권한-설정 (2026-06-22)
+
+- 404→403 순서로 인한 medication id 존재 탐지(minor): `update_medication`/`delete_medication`이 자원 404 체크를 `require_section`보다 먼저 수행 → 투약 영역 권한 없는 직원이 PATCH/DELETE 시 404(없는 id)/403(있는 id)로 medication id 존재 여부를 추정할 수 있음. 인가를 존재 확인보다 앞에 두면 차단(require_section을 session.get 앞으로). 정보 가치 낮아 defer. (backend/app/main.py)
+- 프론트 visible_sections 미전송 시 전체 허용 fallback: `PatientDetail`의 `bundle.visible_sections ?? [전체]`가 구버전/누락 응답을 전체 허용으로 간주(fail-open). 백엔드가 범위 밖 키를 응답에서 빼므로 **실제 데이터 누출은 없고 표시 결정만** 영향. 배포·캐시 단계에서 응답에 항상 visible_sections가 포함되는지 점검. (frontend/src/components/PatientDetail.tsx)
+- BE/FE 정보영역 정의 이중화: 백엔드 `ACCESS_SECTIONS`(key·label·bundle)와 프론트 `SECTIONS`(key·label)가 수작업으로 중복 정의됨 → 영역 추가/이름변경 시 양쪽 + `vis.includes` 매핑을 동시에 고쳐야 하며 누락 시 게이트가 조용히 어긋남. 향후 영역 편집 기능(Epic 5 연장) 도입 시 단일 소스(예: 백엔드가 영역 메타를 내려주는 엔드포인트)로 단일화 검토. (backend/app/main.py, frontend/src/components/StaffManagement.tsx)

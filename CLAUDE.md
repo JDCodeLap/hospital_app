@@ -74,6 +74,16 @@
 
 ## 📝 작업 기록 (최신순)
 
+### 2026-06-22 — 🔍 Story 5.3 코드 리뷰 완료 → done! 🔐 (권한 설정)
+- 검사관 3종 병렬(Blind·Edge·Acceptance, "우회 가능성" 집중) — **Acceptance Auditor AC 1~8 전부 PASS**(스펙 위반 0). Blind·Edge가 **투약 게이트 불완전 매개** 1건 공통 지목
+- **patch 1건**(decision-needed → YC 결정 "지금 닫기"): 투약 영역 게이트를 **`/api/medication-alerts`·`/administer`까지 확장**. `get_patient`·투약 CRUD는 막혔으나 투약 제외 직원이 ①`/alerts`로 전 환자 약 이름·용량 열람(읽기 누출) ②administer로 완료 기록 가능했음 → `medication_alerts`는 권한 없으면 빈 목록(프론트 변경 0), `administer`엔 `require_section` 403 가드. 이제 상세·CRUD·알림·완료 **전부 일관 차단**
+- defer 3건 → `deferred-work.md`: ①404→403 순서 medication id 존재 탐지(minor) ②프론트 visible_sections 미전송 fallback=전체(실데이터 누출 없음·표시만) ③BE `ACCESS_SECTIONS`/FE `SECTIONS` 정의 이중화(드리프트 위험)
+- dismiss 7건: 진단·검사·수납 쓰기 미게이트(엔드포인트 없음)·empty/'all'→전체(의도 무회귀)·full→'all' 단순화·admin 강등 stale scope·403 메시지 하드코딩(투약 전용 컴포넌트)·admin scope 편집 무의미저장·scopeSummary fallback
+- ⚠️ **백엔드 런타임은 환경(Python·PostgreSQL) 미설치로 전 과정 미검증** — 코드 정적 검토만. 스토리에 수동 검증 계획 첨부(서버 띄울 때 실행 권장)
+- 상태: **5-3 = done**
+- ▶▶ **다음: Story 5.4 (전체 현황 대시보드, FR13)** → `bmad-create-story`
+  - 인계: 관리자용 통계(오늘 환자 수·과별 혼잡도·평균 대기시간). 5.1 `/api/admin/overview` 확장 또는 `/api/admin/dashboard`. `func.count()` 집계로(5.1 deferred "전체 행 메모리 적재" 정리 함께). `StageEntry`(4.4)·`STAGE_OVERDUE_MINUTES`로 대기 통계, `Visit.department`로 과별 혼잡도.
+
 ### 2026-06-22 — 🛠️ Story 5.3 개발 완료! (권한 설정) → review 🔐 (FR12)
 - 🗄️ 백엔드(`models.py`·`main.py`): `Staff.access_scope` 컬럼(멱등 ADD COLUMN, 기본 'all'=무회귀) + 상수/헬퍼(`ACCESS_SECTIONS`·`ALL_SECTION_KEYS`·`normalize_scope`(무효키 422·5종→'all')·`allowed_sections`(관리자/‘all’→전체)·`require_section`(403)) + **`get_patient`가 허용 영역만 반환**(`visible_sections` 동봉, 안전·협업 정보는 항상 포함, lab_results·billings 키 보존) + **투약·방문 쓰기 403 게이트** + `staff_public`/`StaffCreateIn`/`StaffUpdateIn`/`create_staff`/`update_staff`에 access_scope
 - 🖥️ 프론트: `StaffManagement`(접근범위 편집 — "전체 접근" 토글+5영역 체크박스, 일반직원 배지) + `PatientDetail`(`visible_sections` 분기 + `NoAccessCard` "권한 없음", 투약 범위밖이면 처방폼도 숨김) + `PrescribeForm`·`MedicationList`(**403=인라인 안내 / 401=로그아웃 분리** → 2-3 deferred 이행)
