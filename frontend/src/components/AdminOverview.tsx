@@ -21,15 +21,19 @@ const ADMIN_FEATURES = [
   {
     icon: "group",
     title: "직원 계정 관리",
-    desc: "직원 등록·수정·삭제와 직군 지정",
+    desc: "직원 등록·수정·삭제, 직군·접근 범위 지정", // 5.3 접근 범위는 이 화면에 통합됨
     href: "/admin/staff", // Story 5.2 완료 — 활성
+  },
+  {
+    icon: "monitoring",
+    title: "전체 현황",
+    desc: "오늘 방문·단계별 혼잡도·평균 대기시간",
+    href: "/admin/dashboard", // Story 5.4 완료 — 활성
   },
 ];
 
 // 앞으로 추가될 관리 기능(준비 중 자리표시)
 const COMING_SOON = [
-  { icon: "lock", title: "권한 설정", desc: "직원별 볼 수 있는 정보 범위 설정 (5.3)" },
-  { icon: "monitoring", title: "전체 현황", desc: "오늘 환자 수·과별 혼잡도·평균 대기시간 (5.4)" },
   { icon: "tune", title: "기준값 설정", desc: "대기 초과 알림 기준 시간 등 (5.5)" },
 ];
 

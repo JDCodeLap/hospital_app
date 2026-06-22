@@ -20,7 +20,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, col, select
 
@@ -661,9 +661,76 @@ def admin_overview(
     이 엔드포인트의 목적은 ①관리자 게이트(get_current_admin) 증명 ②랜딩의 최소 콘텐츠.
     오늘 환자 수·과별 혼잡도·평균 대기시간 등 본격 대시보드는 Story 5.4(FR13).
     """
-    staff_count = len(session.exec(select(Staff)).all())
-    patient_count = len(session.exec(select(Patient)).all())
+    # DB에서 개수만 집계(전체 행을 메모리로 적재하지 않음 — 5.1 deferred 이행, Story 5.4).
+    staff_count = session.scalar(select(func.count()).select_from(Staff)) or 0
+    patient_count = session.scalar(select(func.count()).select_from(Patient)) or 0
     return {"staff_count": staff_count, "patient_count": patient_count}
+
+
+@app.get("/api/admin/dashboard")
+def admin_dashboard(
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2) — 일반 직원 403
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """관리자 현황 대시보드(Story 5.4, FR13).
+
+    오늘 방문 환자 수·단계별 혼잡도·평균 대기시간을 집계해 돌려준다.
+    '혼잡도'는 진행 단계(접수/진료/검사/수납) 기준(current_stage = 지금 어디 있는지).
+    대기시간은 StageEntry 진입 시각 기준(4.4 재사용). 기준값은 5.5 전까지 하드코딩.
+    카운트류는 func.count()로 DB 집계(행 적재 X).
+    """
+    now = datetime.now()
+    today = now.date()
+    day_start = datetime(today.year, today.month, today.day)
+
+    # 요약 수 — DB 집계(메모리 적재 X)
+    patient_count = session.scalar(select(func.count()).select_from(Patient)) or 0
+    staff_count = session.scalar(select(func.count()).select_from(Staff)) or 0
+
+    # 오늘 방문 환자 수 — 오늘 [00:00, 내일 00:00) 범위 방문의 '서로 다른 환자' 수.
+    today_patient_count = (
+        session.scalar(
+            select(func.count(func.distinct(Visit.patient_id))).where(
+                Visit.visited_at >= day_start,
+                Visit.visited_at < day_start + timedelta(days=1),
+            )
+        )
+        or 0
+    )
+
+    # 단계별 혼잡도 — current_stage GROUP BY. 표준 4단계는 0이라도 포함, 그 외는 '기타'.
+    rows = session.exec(
+        select(Patient.current_stage, func.count()).group_by(Patient.current_stage)
+    ).all()
+    counts = {stage: int(n) for stage, n in rows}
+    stage_distribution = [
+        {"stage": s, "count": counts.pop(s, 0)} for s in STAGE_ORDER
+    ]
+    etc = sum(counts.values())  # 비표준 단계 합
+    if etc:
+        stage_distribution.append({"stage": "기타", "count": etc})
+
+    # 평균 대기시간·초과 인원 — StageEntry(환자당 1건, 소규모) 기준. stage_wait_info 재사용.
+    entries = session.exec(select(StageEntry)).all()
+    waits: list[int] = []
+    overdue_count = 0
+    for e in entries:
+        minutes, is_overdue = stage_wait_info(e.entered_at, now)
+        if minutes is not None:
+            waits.append(minutes)
+            if is_overdue:
+                overdue_count += 1
+    avg_wait_minutes = round(sum(waits) / len(waits)) if waits else 0
+
+    return {
+        "patient_count": patient_count,
+        "staff_count": staff_count,
+        "today_patient_count": today_patient_count,
+        "stage_distribution": stage_distribution,  # [{stage, count}] 접수→수납(+기타)
+        "avg_wait_minutes": avg_wait_minutes,
+        "overdue_count": overdue_count,
+        "overdue_threshold_minutes": STAGE_OVERDUE_MINUTES,  # 표시용(5.5 전 하드코딩)
+    }
 
 
 @app.get("/api/admin/staff")

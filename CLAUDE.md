@@ -74,6 +74,34 @@
 
 ## 📝 작업 기록 (최신순)
 
+### 2026-06-22 — 🛠️ Story 5.4 개발 완료! (전체 현황 대시보드) → review 📊 (FR13)
+- 🗄️ 백엔드(`main.py`): `func` import + **`admin_overview`를 `func.count()`로 교체**(5.1 deferred "전체 행 메모리 적재" 이행) + **`GET /api/admin/dashboard`**(get_current_admin 보호) — 전체 환자·직원 수(func.count), 오늘 방문 환자 수(func.count distinct), **단계별 혼잡도**(current_stage GROUP BY, STAGE_ORDER 전부+기타), 평균 대기·초과 인원(StageEntry+stage_wait_info), `overdue_threshold_minutes` 동봉
+- 🖥️ 프론트: `AdminDashboard.tsx`(NEW: 요약 카드 4개 + **단계별 혼잡도 CSS 막대**, 차트 라이브러리 0, 새로고침·401/403) + `admin/dashboard/page.tsx`(NEW) + `AdminOverview`(전체현황 카드 활성화 + 권한설정 카드 정리=5.3 직원관리 통합 반영, COMING_SOON은 5.5만)
+- ★ 핵심: "과별 혼잡도"=진행 단계 기준 / func.count 집계 / CSS 막대(의존성 0) / 읽기 전용(기준값=5.5) / 관리자 전용 백엔드 강제
+- ✅ 검증: **백엔드 실호출 검증**(Supabase 연동 후 첫 케이스) — admin 대시보드 200(환자8·단계합8·평균61분·초과8)·nurse **403**·미인증 **401**·overview func.count 정상 / 프론트 build(/admin/dashboard 정적)·lint(0 오류) **전부 PASS**. (오늘 방문 0=시드 방문이 과거라 정상)
+- 서버 재기동: 백엔드 8000(새 코드)·프론트 3000 다시 실행 중
+- **다음 할 일:** 🔍 `bmad-code-review`(권장) → 통과 시 Story 5.5(기준값 설정, FR14) = Epic 5 마지막
+
+### 2026-06-22 — 🟢 Supabase 연동 + 백엔드·프론트 실서버 기동 (실사용 환경 구성)
+- 사용자 요청: "POSTGRESQL 말고 SUPABASE 쓰자" → 로컬 PostgreSQL 설치 대신 **Supabase(호스티드 Postgres, 도쿄 리전)** 사용. 백엔드 코드 변경 0(연결 주소만 교체)
+- 이 환경엔 Python·PostgreSQL·.venv·node_modules가 모두 없었음 → **winget으로 Python 3.12.10 설치** + `backend/.venv` 생성 + `requirements.txt` 8종 설치 / 프론트 `npm install` 복구
+- `backend/.env` 작성(gitignore됨): `DATABASE_URL`(Supabase **Session pooler, IPv4, aws-1-ap-northeast-1**) + 랜덤 `JWT_SECRET_KEY` + CORS
+  - ★ 삽질: Direct(IPv6) 주소는 닿았다 끊겼다 불안정 → **Session pooler(IPv4)로 전환**해야 안정. 사용자명에 프로젝트ID 포함(`postgres.<ref>`), 호스트 prefix는 `aws-1`(aws-0 아님). 비번 특수문자 URL 인코딩
+  - ★ 비번 혼선: 처음 `apsxkffj1!!D`(틀림)→재설정 시도→최종 `apsxkffj1!!`로 연결 성공
+- 백엔드 8000·프론트 3000 기동 성공: `/api/health` ok, nurse1 로그인 토큰 발급, Supabase에 테이블 생성+시드 자동 완료. **이제 백엔드 런타임 검증 가능**(그동안 5.2·5.3은 코드검토만)
+- 로그인 계정: nurse1/test1234(직원), admin1/admin1234(관리자). DB 비번 `apsxkffj1!!`(화면 로그인 아님)
+- ERD 화면 개선 커밋(`56fd9b3`): `er.useMaxWidth=true`+`layoutDirection=LR`(세로 배치·너비 맞춤), AppShell `wide` 옵션. ★Mermaid ER은 연결선 곡선만 지원(직선 불가)
+- ⚠️ 서버는 이 세션 백그라운드로 실행 중(창 닫으면 종료). `.env`는 git 미추적
+
+### 2026-06-22 — 📝 Story 5.4 작성 완료 (ready-for-dev) — 전체 현황 대시보드 📊 (FR13)
+- `bmad-create-story`로 **Story 5.4 (전체 현황 대시보드, FR13)** 작성 ✅
+- 결과 파일: `_bmad-output/implementation-artifacts/5-4-전체-현황-대시보드.md`
+- 범위: ①백엔드 — `GET /api/admin/dashboard`(get_current_admin 보호) = `func.count()` 집계로 전체 환자·직원·오늘 방문 수 + **단계별 혼잡도**(current_stage 분포) + 평균 대기시간·초과 인원(StageEntry+stage_wait_info 재사용) + `func` import + **admin_overview를 func.count로 교체**(5.1 deferred 이행) ②프론트 — `AdminDashboard.tsx`(통계 카드 + **CSS 막대그래프**, 차트 라이브러리 0) + `/admin/dashboard` 페이지 + AdminOverview "전체 현황" 카드 활성화(+권한설정 카드 정리)
+- ★ 핵심 판단: **"과별 혼잡도"=진행 단계(접수/진료/검사/수납) 기준**(current_stage가 실시간 위치라 정확, Visit.department는 이력이라 모호 → 과별 세분화는 후속) / **집계는 func.count**(행 적재 금지) / **그래프=CSS 막대**(의존성 0) / **읽기 전용**(기준값 수정=5.5) / 관리자 전용 백엔드 강제
+- ★ 범위 밖: 기준값 설정(5.5)·과(department) 세분화·차트 라이브러리·기간 필터·실시간 자동 갱신·추세
+- ★ 5.5 인계: `STAGE_OVERDUE_MINUTES` 하드코딩을 DB 설정으로 옮기면 4.4·5.4가 자동 반영
+- **다음 할 일:** 🛠️ `bmad-dev-story`로 Story 5.4 개발 (이제 백엔드 런타임 검증 실제 가능)
+
 ### 2026-06-22 — 🔍 Story 5.3 코드 리뷰 완료 → done! 🔐 (권한 설정)
 - 검사관 3종 병렬(Blind·Edge·Acceptance, "우회 가능성" 집중) — **Acceptance Auditor AC 1~8 전부 PASS**(스펙 위반 0). Blind·Edge가 **투약 게이트 불완전 매개** 1건 공통 지목
 - **patch 1건**(decision-needed → YC 결정 "지금 닫기"): 투약 영역 게이트를 **`/api/medication-alerts`·`/administer`까지 확장**. `get_patient`·투약 CRUD는 막혔으나 투약 제외 직원이 ①`/alerts`로 전 환자 약 이름·용량 열람(읽기 누출) ②administer로 완료 기록 가능했음 → `medication_alerts`는 권한 없으면 빈 목록(프론트 변경 0), `administer`엔 `require_section` 403 가드. 이제 상세·CRUD·알림·완료 **전부 일관 차단**
