@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>병원 앱 · DB 스키마 (ERD)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0f1115;
+      color: #e6e9ef;
+      font-family: "Pretendard", system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 28px 24px 48px;
+    }
+    h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; }
+    .legend { margin: 0 0 4px; font-size: 14px; color: #aab2c0; }
+    .note { margin: 0 0 20px; font-size: 12px; color: #6b7280; }
+    .diagram {
+      overflow: auto;
+      border: 1px solid #242a36;
+      border-radius: 14px;
+      background: #161a22;
+      padding: 16px;
+    }
+    .diagram svg { height: auto !important; max-width: none !important; }
+    .err { color: #f87171; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>데이터베이스 스키마 (ERD) — 까마귀발 표기법</h1>
+  <p class="legend">❘❘ = 정확히 1개 · ◦&lt; = 0개 이상(여러 개) · ◦❘ = 0개 또는 1개</p>
+  <p class="note">backend/app/models.py 기준 · 서버·로그인 없이 보는 미리보기 (실제 앱의 /schema 화면과 동일)</p>
+
+  <div class="diagram">
+    <pre class="mermaid">
+erDiagram
+    STAFF ||--o{ SAFETY_ACK : "확인"
+    STAFF ||--o{ MEDICATION_ADMINISTRATION : "투약"
+    STAFF ||--o{ CHECKLIST_CHECK : "체크"
+    STAFF ||--o{ HANDOVER_NOTE : "작성"
+
+    PATIENT ||--o{ VISIT : "방문"
+    PATIENT ||--o{ DIAGNOSIS : "진단"
+    PATIENT ||--o{ MEDICATION : "처방"
+    PATIENT ||--o{ LAB_RESULT : "검사"
+    PATIENT ||--o{ BILLING : "수납"
+    PATIENT ||--o| SAFETY_ACK : "안전확인"
+    PATIENT ||--o{ CHECKLIST_CHECK : "절차"
+    PATIENT ||--o{ HANDOVER_NOTE : "인계"
+    PATIENT ||--o| STAGE_ENTRY : "단계진입"
+
+    MEDICATION ||--o{ MEDICATION_ADMINISTRATION : "투약완료"
+
+    STAFF["직원 (staff)"] {
+        int id PK "직원 번호"
+        string username UK "로그인 아이디"
+        string hashed_password "암호화된 비밀번호"
+        string full_name "이름"
+        string role "권한 admin·staff"
+        string job_title "직군 의사·간호사·원무과"
+        bool is_active "활성 여부"
+    }
+    PATIENT["환자 (patient)"] {
+        int id PK "환자 번호"
+        string registration_number UK "등록번호"
+        string name "이름"
+        date birth_date "생년월일"
+        string gender "성별"
+        string allergies "알레르기"
+        string current_stage "현재 단계"
+    }
+    VISIT["방문기록 (visit)"] {
+        int id PK "방문 번호"
+        int patient_id FK "환자"
+        datetime visited_at "방문 시각"
+        string department "방문 부서"
+        string reason "방문 사유"
+    }
+    DIAGNOSIS["진단 (diagnosis)"] {
+        int id PK "진단 번호"
+        int patient_id FK "환자"
+        string name "진단명"
+        date diagnosed_at "진단일"
+        string status "상태"
+    }
+    MEDICATION["처방약 (medication)"] {
+        int id PK "처방 번호"
+        int patient_id FK "환자"
+        string drug_name "약 이름"
+        string dose "용량"
+        string schedule "투약 시간"
+        string status "상태"
+    }
+    LAB_RESULT["검사결과 (lab_result)"] {
+        int id PK "검사 번호"
+        int patient_id FK "환자"
+        string test_name "검사명"
+        string value "결과값"
+        string unit "단위"
+        string flag "정상·이상"
+        datetime measured_at "측정 시각"
+    }
+    BILLING["수납 (billing)"] {
+        int id PK "수납 번호"
+        int patient_id FK "환자"
+        string item "항목"
+        int amount "금액 원"
+        string status "미납·완납"
+    }
+    SAFETY_ACK["안전경고확인 (safety_ack)"] {
+        int id PK "기록 번호"
+        int patient_id FK,UK "환자 1건"
+        int acknowledged_by FK "확인한 직원"
+        datetime acknowledged_at "확인 시각"
+        string note "메모"
+    }
+    MEDICATION_ADMINISTRATION["투약완료기록 (medication_administration)"] {
+        int id PK "기록 번호"
+        int medication_id FK "처방약"
+        string scheduled_time "예정 시각"
+        date administered_date "완료 날짜"
+        int administered_by FK "투약한 직원"
+        datetime administered_at "완료 시각"
+    }
+    CHECKLIST_CHECK["절차체크 (checklist_check)"] {
+        int id PK "기록 번호"
+        int patient_id FK "환자"
+        string item_key "항목 본인확인·금식·동의서"
+        int checked_by FK "체크한 직원"
+        datetime checked_at "체크 시각"
+    }
+    HANDOVER_NOTE["인계메모 (handover_note)"] {
+        int id PK "메모 번호"
+        int patient_id FK "환자"
+        string from_stage "작성 시점 단계"
+        string note "메모 내용"
+        int author_id FK "작성한 직원"
+        datetime created_at "작성 시각"
+    }
+    STAGE_ENTRY["단계진입시각 (stage_entry)"] {
+        int id PK "기록 번호"
+        int patient_id FK,UK "환자 1건"
+        string stage "현재 단계"
+        datetime entered_at "진입 시각"
+    }
+    TEST_ITEM["테스트용 (test_item)"] {
+        int id PK "번호"
+        string name "이름"
+        string note "메모"
+    }
+    </pre>
+  </div>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    try {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "dark",
+        securityLevel: "loose",
+        er: { useMaxWidth: false },
+      });
+    } catch (e) {
+      document.querySelector(".diagram").innerHTML =
+        '<p class="err">다이어그램을 그릴 수 없습니다. 인터넷 연결을 확인하세요(미리보기는 mermaid CDN을 사용).</p>';
+    }
+  </script>
+</body>
+</html>

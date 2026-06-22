@@ -21,6 +21,7 @@ const NAV = [
   { href: "/patients", label: "환자", icon: "person_search" },
   { href: "/board", label: "흐름판", icon: "view_kanban" },
   { href: "/alerts", label: "알림", icon: "notifications" },
+  { href: "/schema", label: "스키마", icon: "schema" },
 ];
 
 // 관리자에게만 추가로 보이는 메뉴(Story 5.1)
