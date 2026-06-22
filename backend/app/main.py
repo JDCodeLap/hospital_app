@@ -101,6 +101,7 @@ class StaffCreateIn(BaseModel):
     full_name: str = ""
     role: str = "staff"
     job_title: str = ""
+    access_scope: str = "all"  # 5.3: 정보 영역 접근 범위. 기본 전체.
 
 
 class StaffUpdateIn(BaseModel):
@@ -112,6 +113,7 @@ class StaffUpdateIn(BaseModel):
     full_name: str | None = None
     role: str | None = None
     job_title: str | None = None
+    access_scope: str | None = None  # 5.3: 보낸 경우만 변경(부분 수정)
     is_active: bool | None = None
     password: str | None = None
 
@@ -143,6 +145,18 @@ VALID_ROLES = {"admin", "staff"}
 # 직군(job_title)은 분류·표시용(권한과 무관). 자유 입력 대신 권장 목록을 둔다("기타"로 여유).
 JOB_TITLES = ["의사", "간호사", "원무과", "기타"]
 
+# 정보 영역(섹션) — 직원별 접근 범위(Story 5.3, FR12).
+#  key=저장/판정용 내부값, label=화면 표시, bundle=get_patient 응답에서 가리는 키.
+#  주의: scope key와 응답 key가 다른 것이 있다(labs↔lab_results, billing↔billings).
+ACCESS_SECTIONS = [
+    {"key": "visits", "label": "방문", "bundle": "visits"},
+    {"key": "diagnoses", "label": "진단", "bundle": "diagnoses"},
+    {"key": "medications", "label": "투약", "bundle": "medications"},
+    {"key": "labs", "label": "검사", "bundle": "lab_results"},
+    {"key": "billing", "label": "수납", "bundle": "billings"},
+]
+ALL_SECTION_KEYS = {s["key"] for s in ACCESS_SECTIONS}
+
 
 def normalize_role(raw: str) -> str:
     """권한 표기를 정규화(Story 5.2). 'admin'/'staff'만 허용, 그 외는 422.
@@ -170,6 +184,7 @@ def staff_public(s: Staff) -> dict[str, object]:
         "full_name": s.full_name,
         "role": s.role,
         "job_title": s.job_title,
+        "access_scope": s.access_scope,  # 5.3: 정보 영역 접근 범위('all' 또는 키 목록)
         "is_active": s.is_active,
     }
 
@@ -192,6 +207,53 @@ def assert_not_last_admin(session: Session, target: Staff) -> None:
                 status_code=409,
                 detail="마지막 관리자는 강등·삭제·비활성화할 수 없습니다",
             )
+
+
+def normalize_scope(raw: str | None) -> str:
+    """정보 영역 접근 범위를 정규화(Story 5.3). 쓰기 시점에 검증·표준화한다.
+
+    'all' 또는 유효 영역 키의 콤마 목록만 허용. 빈 값/None/'all' → 'all'(전체).
+    무효 키가 있으면 422(조용한 권한 오류 방지). 5개를 다 고르면 'all'로 단순화.
+    """
+    if raw is None:
+        return "all"
+    s = raw.strip().lower()
+    if s in ("", "all"):
+        return "all"
+    keys = [k.strip() for k in s.split(",") if k.strip()]
+    bad = [k for k in keys if k not in ALL_SECTION_KEYS]
+    if bad:
+        raise HTTPException(
+            status_code=422, detail=f"알 수 없는 접근 영역: {', '.join(bad)}"
+        )
+    uniq = sorted(set(keys))
+    return "all" if set(uniq) == ALL_SECTION_KEYS else ",".join(uniq)
+
+
+def allowed_sections(staff: Staff) -> set[str]:
+    """이 직원이 볼 수 있는 정보 영역 키 집합(Story 5.3). 읽기·쓰기 판정 공통.
+
+    관리자는 항상 전체(전권). access_scope가 'all'/빈 값이어도 전체(기본 무회귀).
+    그 외에는 저장된 키 중 유효한 것만(무효 키는 무시 — 저장 시 normalize로 걸러짐).
+    """
+    if staff.role == "admin":
+        return set(ALL_SECTION_KEYS)
+    scope = (staff.access_scope or "").strip().lower()
+    if scope in ("", "all"):
+        return set(ALL_SECTION_KEYS)
+    return {k for k in (x.strip() for x in scope.split(",")) if k in ALL_SECTION_KEYS}
+
+
+def require_section(staff: Staff, section_key: str) -> None:
+    """쓰기 보호(Story 5.3): 해당 영역 접근 권한이 없으면 403.
+
+    401(미인증)과 구분되는 403(권한 없음) — 프론트는 강제 로그아웃이 아니라
+    '권한 없음' 안내로 처리한다(2-3 deferred 이행).
+    """
+    if section_key not in allowed_sections(staff):
+        raise HTTPException(
+            status_code=403, detail="이 정보 영역에 접근 권한이 없습니다"
+        )
 
 
 def next_stage(stage: str) -> str | None:
@@ -449,6 +511,14 @@ async def lifespan(app: FastAPI):
                     "ADD COLUMN IF NOT EXISTS job_title VARCHAR NOT NULL DEFAULT ''"
                 )
             )
+            # 정보 영역 접근 범위(Story 5.3) 컬럼도 멱등 보강 — 기본 'all'(전체)이라
+            # 기존 직원은 지금까지처럼 모든 영역을 본다(무회귀). job_title과 동일 패턴.
+            session.execute(
+                text(
+                    "ALTER TABLE staff "
+                    "ADD COLUMN IF NOT EXISTS access_scope VARCHAR NOT NULL DEFAULT 'all'"
+                )
+            )
             session.commit()
             # 연결 증명용 테스트 데이터(1.2)
             if session.exec(select(TestItem)).first() is None:
@@ -632,6 +702,7 @@ def create_staff(
         full_name=payload.full_name.strip(),
         role=role,
         job_title=payload.job_title.strip(),
+        access_scope=normalize_scope(payload.access_scope),  # 5.3: 영역 범위 정규화
         is_active=True,
     )
     session.add(staff)
@@ -677,6 +748,8 @@ def update_staff(
         staff.full_name = payload.full_name.strip()
     if payload.job_title is not None:
         staff.job_title = payload.job_title.strip()
+    if payload.access_scope is not None:
+        staff.access_scope = normalize_scope(payload.access_scope)  # 5.3: 영역 범위 정규화
     if payload.role is not None:
         staff.role = new_role
     if payload.is_active is not None:
@@ -842,7 +915,11 @@ def get_patient(
             }
         )
 
-    return {
+    # 정보 영역 접근 범위(Story 5.3, FR12): 이 직원이 볼 수 있는 영역만 응답에 담는다.
+    # 관리자·기본('all') 직원은 전체라 기존과 100% 동일한 응답(무회귀).
+    # 기본정보·안전경고·체크리스트·인계메모는 안전·협업 기본이라 항상 포함(게이트 안 함).
+    allowed = allowed_sections(current)
+    bundle: dict[str, object] = {
         "patient": {
             "id": patient.id,
             "registration_number": patient.registration_number,
@@ -853,15 +930,24 @@ def get_patient(
             "allergies": patient.allergies,
             "current_stage": patient.current_stage,
         },
-        "visits": by_pid(Visit),
-        "diagnoses": by_pid(Diagnosis),
-        "medications": by_pid(Medication),
-        "lab_results": by_pid(LabResult),
-        "billings": by_pid(Billing),
         "safety_ack": safety_ack,  # 3.2: 미확인=None / 확인됨=확인자·시각
         "checklist": checklist,  # 3.4: 필수 절차 항목·전체체크여부·다음단계
         "handover_notes": handover_notes,  # 4.2: 부서 간 인계 메모 최신 5건
+        # 프론트가 '권한 없음'과 '기록 없음'을 구분하도록 허용 영역 목록을 함께 내려준다.
+        "visible_sections": sorted(allowed),
     }
+    # 게이트 대상 5종은 허용된 것만 키를 넣는다(없으면 응답에서 빠짐 = 백엔드가 진짜 자물쇠).
+    if "visits" in allowed:
+        bundle["visits"] = by_pid(Visit)
+    if "diagnoses" in allowed:
+        bundle["diagnoses"] = by_pid(Diagnosis)
+    if "medications" in allowed:
+        bundle["medications"] = by_pid(Medication)
+    if "labs" in allowed:
+        bundle["lab_results"] = by_pid(LabResult)
+    if "billing" in allowed:
+        bundle["billings"] = by_pid(Billing)
+    return bundle
 
 
 @app.post("/api/patients/{patient_id}/visits")
@@ -877,6 +963,7 @@ async def add_visit(
     """
     if session.get(Patient, patient_id) is None:
         raise HTTPException(status_code=404, detail="환자를 찾을 수 없습니다")
+    require_section(current, "visits")  # 5.3: 방문 영역 권한 없으면 403
     visit = Visit(
         patient_id=patient_id,
         visited_at=datetime.now(),
@@ -910,6 +997,7 @@ async def add_medication(
     patient = session.get(Patient, patient_id)
     if patient is None:
         raise HTTPException(status_code=404, detail="환자를 찾을 수 없습니다")
+    require_section(current, "medications")  # 5.3: 투약 영역 권한 없으면 403
 
     # 입력 정리: 약 이름은 필수(공백만 입력 방어 — 프론트는 막지만 API 직접 호출도 차단).
     # 빈 약 이름은 안전검사도 무의미하게 통과하므로 저장 전에 거부한다.
@@ -969,6 +1057,7 @@ async def update_medication(
     med = session.get(Medication, medication_id)
     if med is None or med.patient_id != patient_id:
         raise HTTPException(status_code=404, detail="투약 정보를 찾을 수 없습니다")
+    require_section(current, "medications")  # 5.3: 투약 영역 권한 없으면 403
 
     drug_name = payload.drug_name.strip()
     if not drug_name:
@@ -1012,6 +1101,7 @@ async def delete_medication(
     med = session.get(Medication, medication_id)
     if med is None or med.patient_id != patient_id:
         raise HTTPException(status_code=404, detail="투약 정보를 찾을 수 없습니다")
+    require_section(current, "medications")  # 5.3: 투약 영역 권한 없으면 403
     session.delete(med)
     try:
         session.commit()

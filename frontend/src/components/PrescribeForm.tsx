@@ -73,10 +73,16 @@ export function PrescribeForm({
         body: JSON.stringify({ ...payload, acknowledged }),
       });
 
-      if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
         // 세션 만료/무효 → 토큰 비우고 로그인 화면으로(기존 정책 일관)
         clearToken();
         router.replace("/login");
+        return;
+      }
+      if (res.status === 403) {
+        // 5.3: 권한 없음(투약 영역 범위 밖) → 로그아웃이 아니라 인라인 안내(2-3 deferred 이행).
+        // 정상 UI에선 범위 밖이면 폼을 안 그리므로 직접 호출 방어 성격.
+        setError("이 정보 영역(투약)에 접근 권한이 없습니다.");
         return;
       }
       if (res.status === 409) {

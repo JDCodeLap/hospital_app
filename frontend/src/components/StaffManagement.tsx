@@ -21,6 +21,7 @@ type StaffRow = {
   full_name: string;
   role: string;
   job_title: string;
+  access_scope: string; // 5.3: "all" 또는 영역 키 콤마 목록
   is_active: boolean;
 };
 
@@ -32,6 +33,29 @@ const ROLE_OPTIONS = [
 const ROLE_LABEL: Record<string, string> = { admin: "관리자", staff: "일반직원" };
 // 직군 select(분류·표시용). 빈 값은 "미지정".
 const JOB_TITLES = ["의사", "간호사", "원무과", "기타"];
+
+// 정보 영역 접근 범위(5.3, FR12) — 백엔드 ACCESS_SECTIONS와 키·라벨 일치.
+const SECTIONS = [
+  { key: "visits", label: "방문" },
+  { key: "diagnoses", label: "진단" },
+  { key: "medications", label: "투약" },
+  { key: "labs", label: "검사" },
+  { key: "billing", label: "수납" },
+];
+const SECTION_LABEL: Record<string, string> = Object.fromEntries(
+  SECTIONS.map((s) => [s.key, s.label]),
+);
+
+// 저장된 access_scope 문자열 → 화면 표시용 요약("전체" 또는 "방문·진단…")
+function scopeSummary(scope: string): string {
+  const s = (scope || "all").trim().toLowerCase();
+  if (s === "" || s === "all") return "전체";
+  return s
+    .split(",")
+    .map((k) => SECTION_LABEL[k.trim()] ?? k.trim())
+    .filter(Boolean)
+    .join("·");
+}
 
 export function StaffManagement() {
   const router = useRouter();
@@ -50,6 +74,9 @@ export function StaffManagement() {
   const [fFullName, setFFullName] = useState("");
   const [fRole, setFRole] = useState("staff");
   const [fJobTitle, setFJobTitle] = useState("");
+  // 접근 범위(5.3): 전체 접근 토글 + 개별 영역 선택. 전체면 fSections 무시.
+  const [fScopeAll, setFScopeAll] = useState(true);
+  const [fSections, setFSections] = useState<string[]>([]);
   const [fActive, setFActive] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -133,6 +160,8 @@ export function StaffManagement() {
     setFFullName("");
     setFRole("staff");
     setFJobTitle("");
+    setFScopeAll(true); // 기본 전체 접근
+    setFSections([]);
     setFActive(true);
     setFormError(null);
     setActionError(null);
@@ -146,10 +175,26 @@ export function StaffManagement() {
     setFFullName(s.full_name);
     setFRole(s.role === "admin" ? "admin" : "staff");
     setFJobTitle(s.job_title);
+    // 접근 범위 파싱: 'all'/빈 값이면 전체, 아니면 개별 영역 선택
+    const sc = (s.access_scope || "all").trim().toLowerCase();
+    if (sc === "" || sc === "all") {
+      setFScopeAll(true);
+      setFSections([]);
+    } else {
+      setFScopeAll(false);
+      setFSections(sc.split(",").map((x) => x.trim()).filter(Boolean));
+    }
     setFActive(s.is_active);
     setFormError(null);
     setActionError(null);
     setFormOpen(true);
+  }
+
+  // 개별 영역 체크 토글
+  function toggleSection(key: string) {
+    setFSections((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
   }
 
   function closeForm() {
@@ -170,6 +215,12 @@ export function StaffManagement() {
         return;
       }
     }
+    // 접근 범위: 전체가 아니면 최소 1개 영역 선택해야 함(0개는 의미 없음·실수 방지)
+    if (!fScopeAll && fSections.length === 0) {
+      setFormError("접근 영역을 최소 1개 선택하거나 '전체 접근'을 켜세요");
+      return;
+    }
+    const accessScope = fScopeAll ? "all" : fSections.join(",");
     busyRef.current = true;
     setSubmitting(true);
     setFormError(null);
@@ -186,6 +237,7 @@ export function StaffManagement() {
             full_name: fFullName.trim(),
             role: fRole,
             job_title: fJobTitle.trim(),
+            access_scope: accessScope,
           }),
         });
       } else {
@@ -194,6 +246,7 @@ export function StaffManagement() {
           full_name: fFullName.trim(),
           role: fRole,
           job_title: fJobTitle.trim(),
+          access_scope: accessScope,
           is_active: fActive,
         };
         if (fPassword.trim()) body.password = fPassword;
@@ -395,6 +448,44 @@ export function StaffManagement() {
             )}
           </div>
 
+          {/* 접근 범위(5.3, FR12) — 이 직원이 환자 화면에서 볼 수 있는 정보 영역 */}
+          <div className="mt-4 rounded-lg border border-border-subtle bg-bg-elevated/40 p-3">
+            <span className="text-sm font-medium text-text-secondary">
+              접근 범위 (볼 수 있는 정보)
+            </span>
+            <label className="mt-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={fScopeAll}
+                onChange={(e) => setFScopeAll(e.target.checked)}
+                className="h-5 w-5 accent-accent-primary"
+              />
+              <span className="text-sm text-text-primary">
+                전체 접근 (모든 정보 영역)
+              </span>
+            </label>
+            {!fScopeAll && (
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 border-t border-border-subtle pt-2">
+                {SECTIONS.map((s) => (
+                  <label key={s.key} className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={fSections.includes(s.key)}
+                      onChange={() => toggleSection(s.key)}
+                      className="h-5 w-5 accent-accent-primary"
+                    />
+                    <span className="text-sm text-text-secondary">{s.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {fRole === "admin" && (
+              <p className="mt-2 text-caption text-text-muted">
+                관리자는 접근 범위와 무관하게 항상 모든 정보를 봅니다.
+              </p>
+            )}
+          </div>
+
           {formError && (
             <p role="alert" className="mt-3 text-sm text-danger">
               {formError}
@@ -460,6 +551,13 @@ export function StaffManagement() {
                   {s.job_title && (
                     <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[11px] font-medium text-text-secondary">
                       {s.job_title}
+                    </span>
+                  )}
+                  {/* 접근 범위 배지(5.3) — 관리자는 항상 전체라 일반직원에만 표시 */}
+                  {s.role !== "admin" && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border-subtle px-2 py-0.5 text-[11px] font-medium text-text-secondary">
+                      <Icon name="visibility" className="text-xs" />
+                      {scopeSummary(s.access_scope)}
                     </span>
                   )}
                   {!s.is_active && (

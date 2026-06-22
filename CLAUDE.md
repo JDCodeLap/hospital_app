@@ -74,6 +74,13 @@
 
 ## 📝 작업 기록 (최신순)
 
+### 2026-06-22 — 🛠️ Story 5.3 개발 완료! (권한 설정) → review 🔐 (FR12)
+- 🗄️ 백엔드(`models.py`·`main.py`): `Staff.access_scope` 컬럼(멱등 ADD COLUMN, 기본 'all'=무회귀) + 상수/헬퍼(`ACCESS_SECTIONS`·`ALL_SECTION_KEYS`·`normalize_scope`(무효키 422·5종→'all')·`allowed_sections`(관리자/‘all’→전체)·`require_section`(403)) + **`get_patient`가 허용 영역만 반환**(`visible_sections` 동봉, 안전·협업 정보는 항상 포함, lab_results·billings 키 보존) + **투약·방문 쓰기 403 게이트** + `staff_public`/`StaffCreateIn`/`StaffUpdateIn`/`create_staff`/`update_staff`에 access_scope
+- 🖥️ 프론트: `StaffManagement`(접근범위 편집 — "전체 접근" 토글+5영역 체크박스, 일반직원 배지) + `PatientDetail`(`visible_sections` 분기 + `NoAccessCard` "권한 없음", 투약 범위밖이면 처방폼도 숨김) + `PrescribeForm`·`MedicationList`(**403=인라인 안내 / 401=로그아웃 분리** → 2-3 deferred 이행)
+- ★ 핵심: 3축 분리(role·job_title·access_scope) / 백엔드가 진짜 자물쇠(응답 제외+쓰기 403) / 기본 'all' 무회귀 / 안전·협업 항상 표시 / 403≠401
+- 검증: 프론트 **lint(0 오류)·build(/schema 등 정적, 타입체크) PASS**. ⚠️ **백엔드 런타임 검증은 환경(Python·PostgreSQL·.venv) 미설치로 미실행** — 코드 작성+정적 검토만. 스토리에 수동 검증 계획 6종 첨부(서버 띄울 때 실행 권장)
+- **다음 할 일:** 🔍 `bmad-code-review`(권장, 권한/접근 민감) → 통과 시 Story 5.4(전체 현황 대시보드, FR13)
+
 ### 2026-06-22 — 📝 Story 5.3 작성 완료 (ready-for-dev) — 권한 설정 🔐 (FR12)
 - `bmad-create-story`로 **Story 5.3 (권한 설정, FR12)** 작성 ✅
 - 결과 파일: `_bmad-output/implementation-artifacts/5-3-권한-설정.md`

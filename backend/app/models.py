@@ -32,6 +32,10 @@ class Staff(SQLModel, table=True):
     #  - job_title: 의사/간호사/원무과/기타 — 어떤 일을 하는 사람인지(분류·표시). 화면을 제한하지 않음.
     role: str = "staff"
     job_title: str = ""  # 직군(Story 5.2). 빈 값 허용. 기존 staff 테이블엔 멱등 ALTER로 보강.
+    # 정보 영역 접근 범위(Story 5.3, FR12). "all"(전체) 또는 영역 키 콤마 목록
+    # (visits,diagnoses,medications,labs,billing). role(접근 게이트)·job_title(분류)과 또 다른 축 —
+    # 이 직원이 환자 통합화면에서 '어떤 정보 영역'을 볼 수 있는지. 기존 테이블엔 멱등 ALTER로 보강.
+    access_scope: str = "all"
     is_active: bool = True
 
 

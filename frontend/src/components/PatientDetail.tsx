@@ -40,17 +40,20 @@ type PatientBundle = {
     allergies: string;
     current_stage: string;
   };
-  visits: { visited_at: string; department: string; reason: string }[];
-  diagnoses: { name: string; diagnosed_at: string; status: string }[];
-  medications: MedicationItem[];
-  lab_results: {
+  // 정보 영역 접근 범위(5.3, FR12): 범위 밖이면 그 키가 응답에서 빠지므로 옵셔널.
+  visits?: { visited_at: string; department: string; reason: string }[];
+  diagnoses?: { name: string; diagnosed_at: string; status: string }[];
+  medications?: MedicationItem[];
+  lab_results?: {
     test_name: string;
     value: string;
     unit: string;
     flag: string;
     measured_at: string;
   }[];
-  billings: { item: string; amount: number; status: string }[];
+  billings?: { item: string; amount: number; status: string }[];
+  // 허용된 영역 키 목록(5.3). 없으면(구버전 응답) 전체 허용으로 간주(하위호환).
+  visible_sections?: string[];
   // 안전 경고 확인 상태(3.2): 미확인이면 null
   safety_ack: {
     acknowledged_by: number;
@@ -250,6 +253,15 @@ function DetailContent({
   const medications = bundle.medications ?? [];
   const labResults = bundle.lab_results ?? [];
   const billings = bundle.billings ?? [];
+  // 접근 범위(5.3): 허용 영역 목록. 미전송(구버전)이면 전체 허용으로 간주(하위호환).
+  // scope key 기준(검사=labs, 수납=billing) — 응답 키(lab_results·billings)와 다른 점 주의.
+  const vis = bundle.visible_sections ?? [
+    "visits",
+    "diagnoses",
+    "medications",
+    "labs",
+    "billing",
+  ];
 
   // 처방 수정 대상(잘못 입력 정정). null이면 PrescribeForm은 '추가 모드'.
   const [editingMed, setEditingMed] = useState<MedicationItem | null>(null);
@@ -294,61 +306,77 @@ function DetailContent({
         onSaved={onSaved}
       />
 
-      {/* 방문기록 */}
-      <InfoCard title="방문기록" icon="event">
-        {visits.length === 0 ? (
-          <EmptyRow />
-        ) : (
-          visits.map((v, i) => (
-            <Row
-              key={i}
-              k={`${fmtDateTime(v.visited_at)} · ${v.department}`}
-              v={v.reason || "—"}
+      {/* 방문기록 (5.3: 범위 밖이면 권한 없음 카드) */}
+      {vis.includes("visits") ? (
+        <InfoCard title="방문기록" icon="event">
+          {visits.length === 0 ? (
+            <EmptyRow />
+          ) : (
+            visits.map((v, i) => (
+              <Row
+                key={i}
+                k={`${fmtDateTime(v.visited_at)} · ${v.department}`}
+                v={v.reason || "—"}
+              />
+            ))
+          )}
+        </InfoCard>
+      ) : (
+        <NoAccessCard title="방문기록" icon="event" />
+      )}
+
+      {/* 진단 (5.3) */}
+      {vis.includes("diagnoses") ? (
+        <InfoCard title="진단" icon="clinical_notes">
+          {diagnoses.length === 0 ? (
+            <EmptyRow />
+          ) : (
+            diagnoses.map((d, i) => (
+              <Row
+                key={i}
+                k={d.name}
+                v={`${fmtDate(d.diagnosed_at)}${d.status === "resolved" ? " · 해결" : ""}`}
+              />
+            ))
+          )}
+        </InfoCard>
+      ) : (
+        <NoAccessCard title="진단" icon="clinical_notes" />
+      )}
+
+      {/* 투약 + 처방 입력/수정 (5.3: 투약 범위 밖이면 목록·입력폼 모두 숨기고 권한 없음 카드) */}
+      {vis.includes("medications") ? (
+        <>
+          {/* 투약 — 각 약마다 수정/삭제 버튼(잘못 입력 정정) */}
+          <InfoCard title="투약" icon="medication">
+            <MedicationList
+              patientId={p.id}
+              medications={medications}
+              onEdit={setEditingMed}
+              onSaved={onSaved}
             />
-          ))
-        )}
-      </InfoCard>
+          </InfoCard>
 
-      {/* 진단 */}
-      <InfoCard title="진단" icon="clinical_notes">
-        {diagnoses.length === 0 ? (
-          <EmptyRow />
-        ) : (
-          diagnoses.map((d, i) => (
-            <Row
-              key={i}
-              k={d.name}
-              v={`${fmtDate(d.diagnosed_at)}${d.status === "resolved" ? " · 해결" : ""}`}
-            />
-          ))
-        )}
-      </InfoCard>
+          {/* 처방 입력/수정 (Story 3.1) — 알레르기/금기 충돌 시 경고 팝업.
+              editingMed가 바뀔 때 key로 폼을 리마운트해 입력칸을 그 약 값으로 채운다. */}
+          <PrescribeForm
+            key={editingMed ? `edit-${editingMed.id}` : "new"}
+            patientId={p.id}
+            editing={editingMed}
+            onCancelEdit={() => setEditingMed(null)}
+            onSaved={() => {
+              setEditingMed(null); // 수정 저장 후 추가 모드로 복귀
+              onSaved();
+            }}
+          />
+        </>
+      ) : (
+        <NoAccessCard title="투약" icon="medication" />
+      )}
 
-      {/* 투약 — 각 약마다 수정/삭제 버튼(잘못 입력 정정) */}
-      <InfoCard title="투약" icon="medication">
-        <MedicationList
-          patientId={p.id}
-          medications={medications}
-          onEdit={setEditingMed}
-          onSaved={onSaved}
-        />
-      </InfoCard>
-
-      {/* 처방 입력/수정 (Story 3.1) — 알레르기/금기 충돌 시 경고 팝업.
-          editingMed가 바뀔 때 key로 폼을 리마운트해 입력칸을 그 약 값으로 채운다. */}
-      <PrescribeForm
-        key={editingMed ? `edit-${editingMed.id}` : "new"}
-        patientId={p.id}
-        editing={editingMed}
-        onCancelEdit={() => setEditingMed(null)}
-        onSaved={() => {
-          setEditingMed(null); // 수정 저장 후 추가 모드로 복귀
-          onSaved();
-        }}
-      />
-
-      {/* 검사결과 */}
-      <InfoCard title="검사결과" icon="science">
+      {/* 검사결과 (5.3: scope key는 labs) */}
+      {vis.includes("labs") ? (
+        <InfoCard title="검사결과" icon="science">
         {labResults.length === 0 ? (
           <EmptyRow />
         ) : (
@@ -375,7 +403,10 @@ function DetailContent({
             </div>
           ))
         )}
-      </InfoCard>
+        </InfoCard>
+      ) : (
+        <NoAccessCard title="검사결과" icon="science" />
+      )}
 
       {/* 부서 간 인계 메모(Story 4.2) — 이전 부서가 남긴 메모 표시 + 내 메모 작성 */}
       <HandoverNoteSection
@@ -384,8 +415,9 @@ function DetailContent({
         onSaved={onSaved}
       />
 
-      {/* 수납 */}
-      <InfoCard title="수납" icon="receipt_long">
+      {/* 수납 (5.3) */}
+      {vis.includes("billing") ? (
+        <InfoCard title="수납" icon="receipt_long">
         {billings.length === 0 ? (
           <EmptyRow />
         ) : (
@@ -413,8 +445,27 @@ function DetailContent({
             </div>
           ))
         )}
-      </InfoCard>
+        </InfoCard>
+      ) : (
+        <NoAccessCard title="수납" icon="receipt_long" />
+      )}
     </>
+  );
+}
+
+// 접근 권한이 없는 정보 영역 카드(5.3) — '기록 없음'과 구분해 '권한 없음'을 명확히 표시.
+function NoAccessCard({ title, icon }: { title: string; icon: string }) {
+  return (
+    <section className="rounded-xl border border-border-subtle bg-bg-surface p-5">
+      <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-text-primary">
+        <Icon name={icon} className="text-lg text-text-muted" />
+        {title}
+      </h2>
+      <p className="flex items-center gap-1.5 text-sm text-text-muted">
+        <Icon name="lock" className="text-base" />
+        이 정보는 접근 권한이 없습니다.
+      </p>
+    </section>
   );
 }
 

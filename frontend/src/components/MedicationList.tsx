@@ -46,9 +46,14 @@ export function MedicationList({
         `${API_BASE}/api/patients/${patientId}/medications/${med.id}`,
         { method: "DELETE", headers: { ...authHeader() } },
       );
-      if (res.status === 401 || res.status === 403) {
+      if (res.status === 401) {
         clearToken();
         router.replace("/login");
+        return;
+      }
+      if (res.status === 403) {
+        // 5.3: 권한 없음(투약 영역 범위 밖) → 로그아웃 아닌 인라인 안내(2-3 deferred)
+        setError("이 정보 영역(투약)에 접근 권한이 없습니다.");
         return;
       }
       if (!res.ok) {
