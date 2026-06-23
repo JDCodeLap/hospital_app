@@ -1,9 +1,9 @@
 "use client";
 
 // 앱 공통 틀(MedCore 참고): 모든 로그인 화면을 감싸는 뼈대.
-// - 상단바: 로고 + 알림 아이콘 + 로그아웃 (항상 위에 고정)
-// - PC(md 이상): 왼쪽 사이드 메뉴(대시보드/환자/알림)
-// - 폰: 화면 하단 탭바(대시보드/환자/알림)
+// - 상단바: (폰)더보기 ☰ + 로고 + 알림 + 로그아웃 / (PC)로고 + 알림 + 로그아웃
+// - PC(md 이상): 왼쪽 사이드 메뉴에 전체 메뉴를 펼쳐 둔다(공간 넉넉).
+// - 폰: 하단 탭바 없이, 상단 ☰(더보기)를 눌러 여는 '서랍(drawer)'에 전체 메뉴를 모은다.
 // 사용: 페이지에서 <AuthGuard><AppShell>...내용...</AppShell></AuthGuard>
 
 import { useEffect, useState } from "react";
@@ -15,7 +15,7 @@ import { authHeader } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
 import { LogoutButton } from "@/components/LogoutButton";
 
-// 메뉴 항목 한 곳에서 관리(상단/사이드/하단 탭이 같은 목록을 씀)
+// 메뉴 항목 한 곳에서 관리(PC 사이드 메뉴와 폰 ☰ 서랍이 같은 목록을 씀)
 const NAV = [
   { href: "/", label: "대시보드", icon: "dashboard" },
   { href: "/patients", label: "환자", icon: "person_search" },
@@ -42,6 +42,8 @@ export function AppShell({
   wide?: boolean;
 }) {
   const pathname = usePathname();
+  // 폰 더보기 서랍 열림 여부
+  const [drawerOpen, setDrawerOpen] = useState(false);
   // 현재 직원의 역할(/api/auth/me) — admin이면 관리자 메뉴를 추가로 보인다.
   // 실패/미확정 시 null → 메뉴 숨김(안전 기본값). 진짜 차단은 백엔드 get_current_admin.
   const [role, setRole] = useState<string | null>(null);
@@ -72,23 +74,55 @@ export function AppShell({
     };
   }, []);
 
-  // 관리자면 NAV 끝에 관리자 메뉴를 더한 목록을 쓴다(상수 NAV는 보존)
+  // 전체 메뉴(관리자면 끝에 관리자 메뉴 추가) — PC 사이드 메뉴와 폰 ☰ 서랍이 함께 쓴다.
   const nav = role === "admin" ? [...NAV, ADMIN_NAV] : NAV;
 
   // 현재 화면이 그 메뉴인지(홈은 정확히 "/", 나머지는 시작 일치)
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
+  // 화면(주소)이 바뀌면 서랍은 닫는다 — 메뉴를 골라 이동했는데 서랍이 남아 있지 않게.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  // 서랍이 열려 있는 동안 Esc로 닫기 + 뒤 배경 스크롤 잠금(서랍에 집중)
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [drawerOpen]);
+
   return (
     <div className="min-h-screen bg-bg-base text-text-primary">
       {/* ── 상단바 ───────────────────────────── */}
       <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-border-subtle bg-bg-surface px-4 md:px-6">
-        <Link href="/" className="flex items-center gap-2">
-          <Icon name="health_and_safety" fill className="text-2xl text-accent-primary" />
-          <span className="text-lg font-bold tracking-tight text-accent-primary">
-            병원 안전관리
-          </span>
-        </Link>
+        <div className="flex items-center gap-1">
+          {/* 더보기 ☰ (폰 전용) — 전체 메뉴가 든 서랍을 연다. PC는 사이드 메뉴가 있어 숨김. */}
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="메뉴 열기"
+            aria-expanded={drawerOpen}
+            className="flex h-11 w-11 items-center justify-center rounded-full text-text-secondary hover:bg-bg-elevated hover:text-text-primary md:hidden"
+          >
+            <Icon name="menu" className="text-xl" />
+          </button>
+          <Link href="/" className="flex items-center gap-2">
+            <Icon name="health_and_safety" fill className="text-2xl text-accent-primary" />
+            <span className="text-lg font-bold tracking-tight text-accent-primary">
+              병원 안전관리
+            </span>
+          </Link>
+        </div>
         <div className="flex items-center gap-1">
           <Link
             href="/alerts"
@@ -102,7 +136,7 @@ export function AppShell({
       </header>
 
       <div className="flex">
-        {/* ── PC 사이드 메뉴 ─────────────────── */}
+        {/* ── PC 사이드 메뉴 ─────────────────── (전체 메뉴 펼침) */}
         <aside className="sticky top-16 hidden h-[calc(100vh-4rem)] w-60 shrink-0 flex-col gap-1 border-r border-border-subtle bg-bg-surface p-3 md:flex">
           {nav.map((n) => {
             const active = isActive(n.href);
@@ -124,10 +158,10 @@ export function AppShell({
           })}
         </aside>
 
-        {/* ── 본문 ───────────────────────────── */}
+        {/* ── 본문 ───────────────────────────── (하단 바가 없으므로 아래 여백 일반값) */}
         <main
           className={
-            "mx-auto w-full flex-1 p-4 pb-24 md:p-6 md:pb-6 " +
+            "mx-auto w-full flex-1 p-4 md:p-6 " +
             (wide ? "max-w-none" : "max-w-5xl")
           }
         >
@@ -135,25 +169,54 @@ export function AppShell({
         </main>
       </div>
 
-      {/* ── 폰 하단 탭바 ───────────────────── */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around border-t border-border-subtle bg-bg-surface md:hidden">
-        {nav.map((n) => {
-          const active = isActive(n.href);
-          return (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={
-                "flex flex-1 flex-col items-center gap-0.5 " +
-                (active ? "font-semibold text-accent-primary" : "text-text-secondary")
-              }
-            >
-              <Icon name={n.icon} fill={active} className="text-2xl" />
-              <span className="text-[11px]">{n.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+      {/* ── 폰 더보기 서랍(전체 메뉴) ───────── 열렸을 때만 그림 */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-50 md:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="메뉴"
+        >
+          {/* 어두운 배경 — 누르면 닫힘 */}
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setDrawerOpen(false)}
+          />
+          {/* 왼쪽에서 슬라이드되는 패널 */}
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[80%] flex-col gap-1 border-r border-border-subtle bg-bg-surface p-3 shadow-xl">
+            <div className="mb-1 flex items-center justify-between px-1 py-1">
+              <span className="text-sm font-semibold text-text-secondary">메뉴</span>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                aria-label="메뉴 닫기"
+                className="flex h-10 w-10 items-center justify-center rounded-full text-text-secondary hover:bg-bg-elevated hover:text-text-primary"
+              >
+                <Icon name="close" className="text-xl" />
+              </button>
+            </div>
+            {nav.map((n) => {
+              const active = isActive(n.href);
+              return (
+                <Link
+                  key={n.href}
+                  href={n.href}
+                  onClick={() => setDrawerOpen(false)} // 메뉴 고르면 서랍 닫힘
+                  className={
+                    "flex items-center gap-3 rounded-lg px-3 py-3 text-base font-medium transition-colors " +
+                    (active
+                      ? "bg-accent-primary/10 font-semibold text-accent-primary"
+                      : "text-text-secondary hover:bg-bg-elevated hover:text-text-primary")
+                  }
+                >
+                  <Icon name={n.icon} fill={active} className="text-xl" />
+                  {n.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -125,6 +125,39 @@ class SettingsUpdateIn(BaseModel):
     stage_overdue_minutes: int
 
 
+class PatientCreateIn(BaseModel):
+    """신규 환자 등록 요청 본문.
+
+    registration_number(등록번호)는 비우면 서버가 자동으로 다음 번호를 부여한다(P0009...).
+    birth_date는 "YYYY-MM-DD" 문자열을 보내면 Pydantic이 date로 변환(형식 오류는 422).
+    """
+
+    name: str
+    birth_date: date
+    gender: str = "기타"
+    phone: str = ""
+    resident_id: str = ""
+    allergies: str = ""
+    registration_number: str = ""  # 비우면 자동 생성
+
+
+class PatientUpdateIn(BaseModel):
+    """환자 기본정보 수정 요청 본문. 부분 수정 — 보낸 필드만 변경한다.
+
+    resident_id(주민번호)는 None/빈 값이면 기존 값을 유지한다 — 조회 응답은 마스킹값만
+    내보내므로, 빈 값을 그대로 저장하면 마스킹된 값으로 원본을 덮어쓰는 사고가 난다.
+    그래서 새 값을 입력했을 때만 교체한다(StaffUpdateIn의 password와 같은 철학).
+    """
+
+    name: str | None = None
+    birth_date: date | None = None
+    gender: str | None = None
+    phone: str | None = None
+    resident_id: str | None = None
+    allergies: str | None = None
+    registration_number: str | None = None
+
+
 # 인계 메모 길이 상한(Story 4.2). 메모는 모든 조회 묶음·broadcast에 실려 나가므로
 # 무한 길이 입력이 응답을 비대화하지 않도록 서버에서 상한을 강제(빈 메모 422와 같은 게이트).
 HANDOVER_NOTE_MAX_LEN = 2000
@@ -350,6 +383,54 @@ def calc_age(birth: date, today: date | None = None) -> int:
         (today.month, today.day) < (birth.month, birth.day)
     )
     return max(age, 0)  # 잘못 입력된 미래 생년월일에서 음수 나이 방지
+
+
+# 성별 표준값 — 화면 select와 동일(남=M / 여=F / 기타). 그 외 값은 "기타"로 정규화.
+VALID_GENDERS = {"M", "F", "기타"}
+
+
+def normalize_gender(raw: str | None) -> str:
+    """성별 입력을 표준값(M/F/기타)으로 맞춘다. 빈 값·이상한 값은 '기타'."""
+    g = (raw or "").strip()
+    return g if g in VALID_GENDERS else "기타"
+
+
+def generate_registration_number(session: Session) -> str:
+    """다음 등록번호(P0001 형식)를 만든다 — 기존 P#### 중 가장 큰 번호 +1.
+
+    등록 시 사용자가 등록번호를 비워두면 서버가 이 함수로 자동 부여한다.
+    'P' + 숫자 형식만 후보로 보고(수동 입력된 다른 형식은 무시), 비어 있으면 P0001부터.
+    """
+    patients = session.exec(select(Patient)).all()
+    max_n = 0
+    for p in patients:
+        m = re.match(r"^P(\d+)$", (p.registration_number or "").strip())
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return f"P{max_n + 1:04d}"
+
+
+def registration_conflict_error(session: Session, reg: str) -> HTTPException:
+    """등록번호 중복 시 돌려줄 409 예외를 만든다.
+
+    단순 "중복" 문구가 아니라, 그 번호를 '이미 쓰고 있는 환자'의 요약 정보를 함께 담아
+    프론트가 "이 번호는 OOO 환자가 사용 중이라 변경할 수 없습니다"처럼 안내하게 한다.
+    detail을 문자열이 아닌 객체(message + conflict_patient)로 싣는다(처방 충돌 409와 같은 방식).
+    그 환자를 못 찾는 예외적 경우엔 conflict_patient 없이 message만(프론트가 폴백 처리).
+    """
+    other = session.exec(
+        select(Patient).where(Patient.registration_number == reg)
+    ).first()
+    detail: dict[str, object] = {"message": "이미 사용 중인 등록번호입니다."}
+    if other is not None:
+        detail["conflict_patient"] = {
+            "id": other.id,
+            "name": other.name,
+            "registration_number": other.registration_number,
+            "age": calc_age(other.birth_date),
+            "gender": other.gender,
+        }
+    return HTTPException(status_code=409, detail=detail)
 
 
 def seed_patients(session: Session) -> None:
@@ -1049,6 +1130,59 @@ def list_patients(
     return result
 
 
+@app.post("/api/patients")
+def create_patient(
+    payload: PatientCreateIn,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """신규 환자 등록. 이름 필수(빈 값 422), 등록번호 중복 409.
+
+    등록번호를 비우면 서버가 다음 번호를 자동 부여한다. 등록과 동시에 '접수' 단계
+    진입 시각(StageEntry)을 남겨 대기 시계(4.4)가 등록 시점부터 흐르게 한다.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="이름을 입력하세요")
+
+    # 등록번호: 입력하면 중복 검사, 비우면 자동 생성
+    reg = payload.registration_number.strip()
+    if reg:
+        if session.exec(
+            select(Patient).where(Patient.registration_number == reg)
+        ).first() is not None:
+            raise registration_conflict_error(session, reg)
+    else:
+        reg = generate_registration_number(session)
+
+    patient = Patient(
+        registration_number=reg,
+        name=name,
+        birth_date=payload.birth_date,
+        gender=normalize_gender(payload.gender),
+        phone=payload.phone.strip(),
+        resident_id=payload.resident_id.strip(),
+        allergies=payload.allergies.strip(),
+        current_stage="접수",  # 신규 환자는 접수부터 시작
+    )
+    session.add(patient)
+    try:
+        session.commit()
+    except IntegrityError:
+        # 동시 등록 경합으로 등록번호가 겹친 경우(사전 검사를 통과해도 안전망)
+        session.rollback()
+        raise registration_conflict_error(session, reg)
+    session.refresh(patient)
+
+    # 단계 진입 시각 기록(4.4) — 등록 시점에 '접수' 단계로 들어옴(대기 시계 시작)
+    session.add(
+        StageEntry(patient_id=patient.id, stage="접수", entered_at=datetime.now())
+    )
+    session.commit()
+
+    return {"id": patient.id, "registration_number": patient.registration_number}
+
+
 @app.get("/api/patients/{patient_id}")
 def get_patient(
     patient_id: int,
@@ -1159,6 +1293,82 @@ def get_patient(
     if "billing" in allowed:
         bundle["billings"] = by_pid(Billing)
     return bundle
+
+
+@app.patch("/api/patients/{patient_id}")
+async def update_patient(
+    patient_id: int,
+    payload: PatientUpdateIn,
+    current: Staff = Depends(get_current_user),  # 로그인한 직원만(NFR3)
+    session: Session = Depends(get_session),
+) -> dict[str, object]:
+    """환자 기본정보 수정(부분 수정 — 보낸 필드만 변경). 저장 후 구독자에게 갱신 신호.
+
+    - 이름을 보냈는데 비어 있으면 422. 등록번호를 다른 값으로 바꾸면 중복 검사(409).
+    - 주민번호는 '새 값을 입력했을 때만' 교체 — 조회는 마스킹값만 내보내므로, 빈 값을
+      그대로 저장하면 마스킹된 값으로 원본을 덮어쓰는 사고가 난다(빈 값=기존 유지).
+    """
+    patient = session.get(Patient, patient_id)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="환자를 찾을 수 없습니다")
+
+    attempted_reg: str | None = None  # IntegrityError 폴백에서 어떤 번호가 겹쳤는지 알려줄 용도
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="이름을 입력하세요")
+        patient.name = name
+    if payload.registration_number is not None:
+        reg = payload.registration_number.strip()
+        if not reg:
+            raise HTTPException(status_code=422, detail="등록번호를 입력하세요")
+        # 다른 환자가 이미 쓰는 번호로는 못 바꾼다(자기 번호 그대로 두는 건 허용)
+        if reg != patient.registration_number:
+            attempted_reg = reg
+            if session.exec(
+                select(Patient).where(Patient.registration_number == reg)
+            ).first() is not None:
+                raise registration_conflict_error(session, reg)
+        patient.registration_number = reg
+    if payload.birth_date is not None:
+        patient.birth_date = payload.birth_date
+    if payload.gender is not None:
+        patient.gender = normalize_gender(payload.gender)
+    if payload.phone is not None:
+        patient.phone = payload.phone.strip()
+    if payload.allergies is not None:
+        patient.allergies = payload.allergies.strip()
+    # 주민번호는 새 값(비어있지 않을 때)만 교체 — 마스킹값 덮어쓰기 방지(위 docstring 참고)
+    if payload.resident_id is not None and payload.resident_id.strip():
+        patient.resident_id = payload.resident_id.strip()
+
+    session.add(patient)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        # 등록번호 경합 → 그 번호를 쓰는 환자 정보를 담아 안내(폴백: 못 찾으면 message만)
+        raise registration_conflict_error(
+            session, attempted_reg or patient.registration_number
+        )
+    session.refresh(patient)
+
+    # 그 환자 화면을 보고 있는 모든 클라이언트에게 "다시 불러와" 신호(2.4 실시간 갱신)
+    await manager.broadcast(
+        patient_id, {"type": "patient_updated", "patient_id": patient_id}
+    )
+    return {
+        "id": patient.id,
+        "registration_number": patient.registration_number,
+        "name": patient.name,
+        "age": calc_age(patient.birth_date),
+        "birth_date": patient.birth_date.isoformat(),
+        "gender": patient.gender,
+        "phone": patient.phone,
+        "resident_id": mask_resident_id(patient.resident_id),  # 원본 금지 — 마스킹만
+        "allergies": patient.allergies,
+        "current_stage": patient.current_stage,
+    }
 
 
 @app.post("/api/patients/{patient_id}/visits")

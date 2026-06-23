@@ -311,12 +311,23 @@ function DetailContent({
             )}
           </div>
         </div>
-        {/* 현재 단계 배지(단계별 색) — 아래 타임라인과 함께 '지금 어디'를 한눈에 */}
-        <span
-          className={`shrink-0 self-start rounded-full px-3 py-1 text-caption font-semibold ${stageStyle(p.current_stage).bg} ${stageStyle(p.current_stage).text}`}
-        >
-          {p.current_stage}
-        </span>
+        {/* 우측: 현재 단계 배지 + 기본정보 수정 버튼(세로로 쌓음) */}
+        <div className="flex shrink-0 flex-col items-end gap-2 self-start">
+          {/* 현재 단계 배지(단계별 색) — 아래 타임라인과 함께 '지금 어디'를 한눈에 */}
+          <span
+            className={`rounded-full px-3 py-1 text-caption font-semibold ${stageStyle(p.current_stage).bg} ${stageStyle(p.current_stage).text}`}
+          >
+            {p.current_stage}
+          </span>
+          {/* 기본정보 수정 화면(/patients/{id}/edit)으로 이동 */}
+          <Link
+            href={`/patients/${p.id}/edit`}
+            className="inline-flex items-center gap-1 rounded-lg border border-border-subtle px-3 py-1.5 text-caption font-medium text-text-secondary transition-colors hover:bg-bg-elevated hover:text-text-primary"
+          >
+            <Icon name="edit" className="text-base" />
+            정보 수정
+          </Link>
+        </div>
       </div>
 
       {/* 환자 단계 타임라인(Story 4.1) — 접수→진료→검사→수납 진행 현황 */}
