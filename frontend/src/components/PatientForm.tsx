@@ -230,30 +230,50 @@ export function PatientForm({ patientId }: { patientId?: number }) {
         />
       </Field>
 
-      {/* 생년월일(필수) + 성별 */}
-      <div className="flex gap-3">
-        <Field label="생년월일" required className="flex-1">
-          <input
-            type="date"
-            value={birthDate}
-            onChange={(e) => setBirthDate(e.target.value)}
-            aria-label="생년월일"
-            className={inputClass}
-          />
-        </Field>
-        <Field label="성별" className="w-32">
-          <select
-            value={gender}
-            onChange={(e) => setGender(e.target.value)}
-            aria-label="성별"
-            className={inputClass}
-          >
-            <option value="M">남</option>
-            <option value="F">여</option>
-            <option value="기타">기타</option>
-          </select>
-        </Field>
-      </div>
+      {/* 생년월일(필수) */}
+      <Field label="생년월일" required>
+        <input
+          type="date"
+          value={birthDate}
+          onChange={(e) => setBirthDate(e.target.value)}
+          aria-label="생년월일"
+          className={inputClass}
+        />
+      </Field>
+
+      {/* 성별 — 가로 버튼(세그먼트) 방식.
+          드롭다운(select)을 쓰면 모바일에서 OS 기본 선택 모달이 떠 탭이 2번 필요했다.
+          버튼 3개를 나란히 두어 '화면에서 한 번 탭'으로 고르게 한다.
+          접근성: radiogroup/radio + aria-checked로 선택 상태를 보조기기에도 알린다.
+          type="button" 필수 — 폼 안에서 버튼이 실수로 제출(submit)되지 않게. */}
+      <Field label="성별">
+        <div role="radiogroup" aria-label="성별" className="grid grid-cols-3 gap-2">
+          {[
+            { value: "M", label: "남" },
+            { value: "F", label: "여" },
+            { value: "기타", label: "기타" },
+          ].map((opt) => {
+            const selected = gender === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setGender(opt.value)}
+                className={
+                  "h-11 rounded-lg border text-base transition-colors " +
+                  (selected
+                    ? "border-accent-primary bg-accent-primary/10 font-semibold text-accent-primary"
+                    : "border-border-subtle bg-bg-elevated font-medium text-text-secondary hover:border-accent-primary/50 hover:text-text-primary")
+                }
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
 
       {/* 전화번호 */}
       <Field label="전화번호">
