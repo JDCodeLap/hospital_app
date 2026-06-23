@@ -147,6 +147,16 @@
   html {
     @apply font-sans;
   }
+  /* 모바일(작은 화면, < md/768px)에서만 기준 글자 크기를 16→15px로 살짝(약 6%) 줄인다.
+     이 앱은 크기를 rem(비율 단위)으로 짜놔서, 기준 한 줄만 낮추면 글자·여백·버튼이
+     비례해 촘촘해져 한 화면에 더 많은 환자/정보가 들어온다. 모바일 WebView 앱에도 그대로 반영.
+     PC(md 이상)는 16px 유지 → 데스크톱 가독성·터치 영역은 손대지 않는다.
+     되돌리려면 이 @media 블록만 지우면 끝. */
+  @media (max-width: 767.98px) {
+    html {
+      font-size: 15px;
+    }
+  }
 }
 
 /* Material Symbols(아이콘 글꼴) 기본값 — <span class="material-symbols-outlined">이름</span> */
