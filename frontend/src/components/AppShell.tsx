@@ -11,7 +11,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { API_BASE } from "@/lib/api";
-import { authHeader } from "@/lib/auth";
+import { authHeader, fetchMe, getCachedMe } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
 import { LogoutButton } from "@/components/LogoutButton";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -32,9 +32,6 @@ const ADMIN_NAV = {
   icon: "admin_panel_settings",
 };
 
-// /api/auth/me 응답을 기다리는 최대 시간(ms). 넘기면 요청 포기(AuthGuard/AdminGuard와 동일).
-const ME_TIMEOUT_MS = 8000;
-
 export function AppShell({
   children,
   wide = false, // true면 본문을 넓게(스키마 ERD처럼 가로 공간이 필요한 화면)
@@ -47,33 +44,25 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 현재 직원의 역할(/api/auth/me) — admin이면 관리자 메뉴를 추가로 보인다.
   // 실패/미확정 시 null → 메뉴 숨김(안전 기본값). 진짜 차단은 백엔드 get_current_admin.
-  const [role, setRole] = useState<string | null>(null);
+  // ★ 문지기(AuthGuard)와 같은 확인을 공유한다(fetchMe): 직전에 확인해둔 결과(캐시)가
+  //   있으면 즉시 역할을 채워 깜빡임 없이 메뉴를 보이고, 네트워크 요청도 중복으로 나가지 않는다.
+  const [role, setRole] = useState<string | null>(
+    () => getCachedMe()?.role ?? null,
+  );
   // 지금 받을 시간이 된 투약 알림 개수 — 종 아이콘 위 빨간 뱃지로 보여준다(놓치지 않게).
   const [alertCount, setAlertCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ME_TIMEOUT_MS);
     void (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { ...authHeader() },
-          signal: controller.signal,
-        });
-        if (!cancelled && res.ok) {
-          const data: { role?: string } = await res.json();
-          setRole(data?.role ?? null);
-        }
+        const me = await fetchMe();
+        if (!cancelled) setRole(me?.role ?? null);
       } catch {
         // 실패/타임아웃 시 관리자 메뉴 숨김(기본값 유지)
-      } finally {
-        clearTimeout(timeout);
       }
     })();
     return () => {
       cancelled = true;
-      controller.abort();
-      clearTimeout(timeout);
     };
   }, []);
 

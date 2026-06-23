@@ -9,17 +9,18 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
-import { API_BASE } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
-import { clearToken, getToken } from "@/lib/auth";
-
-// /api/auth/me 응답을 기다리는 최대 시간(ms). 이 시간을 넘기면 요청을 포기한다.
-const ME_TIMEOUT_MS = 8000;
+import { fetchMe, getCachedMe, getToken } from "@/lib/auth";
 
 export function AuthGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   // checking: 확인 중(본문 숨김) / authed: 통과(본문 표시)
-  const [status, setStatus] = useState<"checking" | "authed">("checking");
+  // ★ 화면 이동 속도의 핵심: 직전에 확인해둔 결과(캐시)가 아직 살아 있으면
+  //   "확인 중…" 스피너를 건너뛰고 처음부터 통과 상태로 시작한다(=출입증 도장).
+  //   캐시가 없을 때만 스피너를 보이며 백엔드에 묻는다.
+  const [status, setStatus] = useState<"checking" | "authed">(() =>
+    getCachedMe() ? "authed" : "checking",
+  );
 
   useEffect(() => {
     const token = getToken();
@@ -31,41 +32,22 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
     // 컴포넌트가 사라진 뒤 늦게 도착한 응답을 무시하기 위한 표식
     let cancelled = false;
-    // 응답이 너무 늦거나(타임아웃) 화면을 떠나면 요청 자체를 취소한다.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ME_TIMEOUT_MS);
 
-    (async () => {
+    // 신분증 확인(공유 캐시 사용) — 같은 토큰이면 네트워크 요청은 1번만 나간다.
+    // 캐시가 살아 있으면 즉시 반환되므로, 화면 이동 시 거의 깜빡임이 없다.
+    void (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: controller.signal,
-        });
-        if (cancelled) return;
-
-        if (res.ok) {
-          setStatus("authed"); // 유효한 토큰 → 통과
-        } else if (res.status === 401 || res.status === 403) {
-          // 토큰이 실제로 무효(만료/위조) → 신분증 버리고 로그인 화면으로
-          clearToken();
-          router.replace("/login");
-        } else {
-          // 5xx 등 일시적 서버 오류: 유효한 토큰은 지우지 않고 안전하게 로그인 화면으로
-          // (백엔드가 회복되면 그 토큰으로 다시 입장 가능)
-          router.replace("/login");
-        }
+        await fetchMe();
+        if (!cancelled) setStatus("authed"); // 유효한 토큰 → 통과
       } catch {
-        // 네트워크 실패/타임아웃: 토큰은 유지한 채 안전하게 차단(로그인 화면으로)
+        // 토큰 무효(401/403)·네트워크 실패·타임아웃 → 안전하게 로그인 화면으로
+        // (401/403이면 fetchMe 내부에서 토큰·캐시를 이미 비웠다)
         if (!cancelled) router.replace("/login");
-      } finally {
-        clearTimeout(timeout);
       }
     })();
 
     return () => {
       cancelled = true;
-      controller.abort();
-      clearTimeout(timeout);
     };
   }, [router]);
 

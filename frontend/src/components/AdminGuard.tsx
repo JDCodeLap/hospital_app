@@ -12,17 +12,16 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
-import { API_BASE } from "@/lib/api";
-import { authHeader, clearToken, getToken } from "@/lib/auth";
+import { fetchMe, getCachedMe, getToken } from "@/lib/auth";
 import { Spinner } from "@/components/Spinner";
-
-// /api/auth/me 응답을 기다리는 최대 시간(ms). 넘기면 요청 포기(AuthGuard와 동일).
-const ME_TIMEOUT_MS = 8000;
 
 export function AdminGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   // checking: 확인 중(본문 숨김) / authed: 관리자 통과(본문 표시)
-  const [status, setStatus] = useState<"checking" | "authed">("checking");
+  // ★ 직전에 확인해둔 결과(캐시)가 관리자면 스피너를 건너뛰고 바로 통과 상태로 시작한다.
+  const [status, setStatus] = useState<"checking" | "authed">(() =>
+    getCachedMe()?.role === "admin" ? "authed" : "checking",
+  );
 
   useEffect(() => {
     const token = getToken();
@@ -32,48 +31,27 @@ export function AdminGuard({ children }: { children: ReactNode }) {
     }
 
     let cancelled = false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ME_TIMEOUT_MS);
 
-    (async () => {
+    // 신분증 확인(공유 캐시 사용) — 문지기·메뉴바와 같은 결과를 쓰며 요청은 1번만 나간다.
+    void (async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { ...authHeader() },
-          signal: controller.signal,
-        });
+        const me = await fetchMe();
         if (cancelled) return;
-
-        if (res.status === 401 || res.status === 403) {
-          // 무효 토큰 → 신분증 버리고 로그인 화면으로
-          clearToken();
-          router.replace("/login");
-          return;
-        }
-        if (!res.ok) {
-          // 5xx 등 일시 오류: 토큰은 유지, 안전하게 로그인 화면으로
-          router.replace("/login");
-          return;
-        }
-        const data: { role?: string } = await res.json();
-        if (cancelled) return;
-        if (data?.role !== "admin") {
+        if (me?.role !== "admin") {
           // 로그인은 됐지만 관리자가 아님 → 일반 직원: 홈으로 차단(권한 없음)
           router.replace("/");
           return;
         }
         setStatus("authed"); // 관리자 확인 → 통과
       } catch {
-        // 네트워크 실패/타임아웃: 토큰 유지한 채 안전하게 차단
+        // 토큰 무효(401/403)·네트워크 실패·타임아웃 → 안전하게 로그인 화면으로
+        // (401/403이면 fetchMe 내부에서 토큰·캐시를 이미 비웠다)
         if (!cancelled) router.replace("/login");
-      } finally {
-        clearTimeout(timeout);
       }
     })();
 
     return () => {
       cancelled = true;
-      controller.abort();
-      clearTimeout(timeout);
     };
   }, [router]);
 
