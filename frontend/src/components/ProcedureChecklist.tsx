@@ -18,7 +18,7 @@ import { Icon } from "@/components/Icon";
 // get_patient 묶음의 checklist 블록 모양
 export type Checklist = {
   items: { key: string; label: string; checked: boolean }[];
-  all_checked: boolean;
+  effectiveAllChecked: boolean;
   next_stage: string | null;
 };
 
@@ -39,10 +39,32 @@ export function ProcedureChecklist({
   // 재진입 방지 락: 같은 항목/버튼 더블클릭에도 요청이 한 번만 나가게(3.1~3.3 교훈)
   const busyRef = useRef<Set<string>>(new Set());
   const advancingRef = useRef(false);
+  // 낙관적 업데이트: 탭한 즉시 화면에 반영하고 저장은 뒤에서 처리(서버 왕복을 기다리지 않음).
+  // key별로 사용자가 방금 만든 체크 상태를 서버 상태 위에 덮어쓴다.
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // 서버에서 받은 체크 상태가 바뀌면(부모 재조회 완료) 오버라이드를 비운다 — 서버가 최종 진실.
+  // checklist prop의 참조가 매 렌더 달라져도, 실제 checked 값이 바뀔 때만 리셋되도록 시그니처로 비교.
+  // React 권장 패턴: effect 대신 렌더 중 '이전 값과 비교'해 즉시 리셋(추가 렌더·지연 없음).
+  const checkedSignature = (checklist?.items ?? [])
+    .map((i) => `${i.key}:${i.checked}`)
+    .join(",");
+  const [prevSignature, setPrevSignature] = useState(checkedSignature);
+  if (checkedSignature !== prevSignature) {
+    setPrevSignature(checkedSignature);
+    setOverrides({});
+  }
 
   // 묶음에 checklist가 없으면(하위호환) 아무것도 그리지 않음
   if (!checklist) return null;
-  const { items, all_checked, next_stage } = checklist;
+  const { next_stage } = checklist;
+  // 낙관적 반영: 사용자가 방금 만든 상태(overrides)를 서버 상태 위에 덮어 표시한다.
+  const items = checklist.items.map((it) => ({
+    ...it,
+    checked: overrides[it.key] ?? it.checked,
+  }));
+  // 다음 단계 버튼 활성화도 낙관적 상태로 즉시 판정(서버 all_checked prop 대신).
+  const effectiveAllChecked = items.every((it) => it.checked);
 
   // 401/403 공통 처리(세션 만료/무효 → 로그아웃)
   function handleAuthFail() {
@@ -56,6 +78,14 @@ export function ProcedureChecklist({
     busyRef.current.add(key);
     setBusyKeys(new Set(busyRef.current));
     setError(null);
+    setOverrides((prev) => ({ ...prev, [key]: checked })); // 낙관적: 즉시 화면 반영
+    // 저장 실패 시 이 항목의 낙관적 표시를 되돌린다
+    const rollback = () =>
+      setOverrides((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     try {
       const res = await fetch(
         `${API_BASE}/api/patients/${patientId}/checklist/${key}`,
@@ -70,11 +100,13 @@ export function ProcedureChecklist({
         return;
       }
       if (!res.ok) {
+        rollback();
         setError("체크 저장에 실패했습니다. 잠시 후 다시 시도하세요.");
         return;
       }
-      onSaved?.(); // 조용한 reload로 최신 상태 반영(WS가 타 화면도 갱신)
+      onSaved?.(); // 백그라운드 동기화(WS가 타 화면도 갱신). 재조회가 오면 오버라이드 자동 정리.
     } catch {
+      rollback();
       setError("연결에 실패했습니다. 백엔드 서버가 켜져 있는지 확인하세요.");
     } finally {
       busyRef.current.delete(key);
@@ -176,10 +208,10 @@ export function ProcedureChecklist({
         ) : (
           <button
             type="button"
-            disabled={!all_checked || advancing}
+            disabled={!effectiveAllChecked || advancing}
             onClick={() => void advance()}
             className={`flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-base font-semibold transition-colors ${
-              all_checked
+              effectiveAllChecked
                 ? "bg-success text-accent-on hover:bg-success/90"
                 : "cursor-not-allowed bg-bg-elevated text-text-muted"
             } disabled:cursor-not-allowed`}
@@ -187,12 +219,12 @@ export function ProcedureChecklist({
             <Icon name="arrow_forward" className="text-base" />
             {advancing
               ? "처리 중…"
-              : all_checked
+              : effectiveAllChecked
                 ? `다음 단계로 (${next_stage})`
                 : "다음 단계로"}
           </button>
         )}
-        {!all_checked && next_stage !== null && (
+        {!effectiveAllChecked && next_stage !== null && (
           <p className="mt-2 text-caption text-text-muted">
             모든 항목을 체크하면 다음 단계로 진행할 수 있습니다.
           </p>
