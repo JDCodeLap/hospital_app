@@ -131,3 +131,9 @@
 - naive datetime이 '오늘 방문' 경계와 평균 대기·초과 판정에 load-bearing: `admin_dashboard`가 `datetime.now()`(naive local)로 `day_start`를 만들고 `Visit.visited_at`/`StageEntry.entered_at`(둘 다 naive local로 저장)과 비교. 현재 writer들이 모두 naive local로 일관되어 정상 동작하나, 타임존/DST/일부 UTC 저장이 섞이면 '오늘' 윈도우·대기분이 어긋날 수 있음. 앱 전반 UTC aware로 통일 권장(기존 추적 항목의 새 인스턴스). (backend/app/main.py)
 - 수동 새로고침 set-state-after-unmount 가드 없음: 마운트 fetch는 AbortController로 보호되나, "새로고침" 버튼의 `void load()`는 signal 없이 호출 → 느린 네트워크에서 새로고침 직후 화면을 떠나면 언마운트 후 setState 발생 가능. React 19에선 해당 경고가 제거되어 실질 무해하나, 이전 스토리(4.3) 패턴(cancelled/abort 가드)과 일관성 위해 ref-held AbortController로 정리 가능. (frontend/src/components/AdminDashboard.tsx)
 - StageEntry 전체 로드(평균 대기 계산): `select(StageEntry).all()`로 전 행 적재(스펙이 환자당 1건·소규모라 허용). 규모 커지면 `AVG`·`COUNT(WHERE entered_at <= now - threshold)`로 SQL 집계 이관 검토. (backend/app/main.py)
+
+## Deferred from: code review of 5-5-기준값-설정 (2026-06-23)
+
+- 설정 PUT 업서트 동시성 + 시드 레이스: `update_settings`의 get→없으면 INSERT→commit이 원자적 업서트가 아니라, lifespan 시드와 첫 PUT이 멀티워커에서 동시 실행되면 동일 PK(`stage_overdue_minutes`) INSERT 충돌(IntegrityError) 가능. 단일워커 개발에선 무해. `INSERT ... ON CONFLICT` 또는 `try/except IntegrityError` 보강. 기존 시드 레이스 deferred 계열. (backend/app/main.py)
+- 저장 fetch AbortController 부재: `AdminSettings`의 로드 effect는 `controller.abort()`로 보호되나 `save()`의 PUT은 중단 가드가 없어, 저장 중 언마운트 시 응답 도착 후 setState 경고 가능(React 19라 무해). 로드/저장 경로 비대칭. 일관성 차원 보강 권장. (frontend/src/components/AdminSettings.tsx)
+- naive datetime tz 의존: `stage_wait_info`/대기 계산이 `datetime.now()`(naive)와 `entered_at`의 tz 정합성에 의존. 앱 전반 기존 추적 사항(5.4 defer와 동일). 운영 tz 정책 정할 때 일괄 처리. (backend/app/main.py)

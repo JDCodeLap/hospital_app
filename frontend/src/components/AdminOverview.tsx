@@ -1,9 +1,10 @@
 "use client";
 
-// 관리자 페이지 랜딩 본문 (Story 5.1) — 최소 요약 + 앞으로 추가될 기능 안내(준비 중).
+// 관리자 페이지 랜딩 본문 (Story 5.1~5.5) — 최소 요약 + 관리 기능 목록.
 // - GET /api/admin/overview(관리자 보호)를 호출해 전체 직원 수·환자 수를 보여준다.
 //   (게이트 증명 + 최소 콘텐츠. 본격 현황 대시보드=5.4)
-// - 준비 중 카드 4개: 직원 관리(5.2)·권한 설정(5.3)·전체 현황(5.4)·기준값 설정(5.5) = 비활성.
+// - 관리 기능 3종 활성: 직원 계정 관리(5.2/5.3)·전체 현황(5.4)·기준값 설정(5.5).
+//   Epic 5 완료로 '준비 중' 카드는 더 이상 없다(빈 배열이면 섹션 자체를 숨긴다).
 // - 데이터는 AdminGuard 통과 후 여기(클라이언트)에서 토큰 달아 호출(RSC 프리렌더 금지, 1.4).
 
 import { useEffect, useState } from "react";
@@ -30,12 +31,16 @@ const ADMIN_FEATURES = [
     desc: "오늘 방문·단계별 혼잡도·평균 대기시간",
     href: "/admin/dashboard", // Story 5.4 완료 — 활성
   },
+  {
+    icon: "tune",
+    title: "기준값 설정",
+    desc: "대기 초과 알림 기준 시간",
+    href: "/admin/settings", // Story 5.5 완료 — 활성
+  },
 ];
 
-// 앞으로 추가될 관리 기능(준비 중 자리표시)
-const COMING_SOON = [
-  { icon: "tune", title: "기준값 설정", desc: "대기 초과 알림 기준 시간 등 (5.5)" },
-];
+// 앞으로 추가될 관리 기능(준비 중 자리표시). Epic 5 완료로 현재 비어 있음.
+const COMING_SOON: { icon: string; title: string; desc: string }[] = [];
 
 export function AdminOverview() {
   const router = useRouter();
@@ -126,32 +131,36 @@ export function AdminOverview() {
         ))}
       </div>
 
-      {/* 준비 중 기능 카드 */}
-      <h2 className="mt-8 mb-3 text-sm font-semibold text-text-secondary">
-        준비 중
-      </h2>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {COMING_SOON.map((c) => (
-          <div
-            key={c.title}
-            aria-disabled="true"
-            className="flex items-start gap-4 rounded-xl border border-border-subtle bg-bg-surface p-5 opacity-60"
-          >
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-bg-elevated text-text-muted">
-              <Icon name={c.icon} className="text-2xl" />
-            </span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 font-semibold text-text-primary">
-                {c.title}
-                <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-caption font-medium text-text-muted">
-                  곧 추가
+      {/* 준비 중 기능 카드 — 남은 게 있을 때만 섹션을 렌더(Epic 5 완료 시 빈 배열이면 숨김) */}
+      {COMING_SOON.length > 0 && (
+        <>
+          <h2 className="mt-8 mb-3 text-sm font-semibold text-text-secondary">
+            준비 중
+          </h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {COMING_SOON.map((c) => (
+              <div
+                key={c.title}
+                aria-disabled="true"
+                className="flex items-start gap-4 rounded-xl border border-border-subtle bg-bg-surface p-5 opacity-60"
+              >
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-bg-elevated text-text-muted">
+                  <Icon name={c.icon} className="text-2xl" />
                 </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 font-semibold text-text-primary">
+                    {c.title}
+                    <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-caption font-medium text-text-muted">
+                      곧 추가
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-text-secondary">{c.desc}</p>
+                </div>
               </div>
-              <p className="mt-1 text-sm text-text-secondary">{c.desc}</p>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </>
   );
 }

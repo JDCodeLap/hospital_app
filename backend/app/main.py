@@ -27,6 +27,7 @@ from sqlmodel import Session, col, select
 from .config import settings
 from .database import engine, get_session, init_db
 from .models import (
+    AppSetting,
     Billing,
     ChecklistCheck,
     Diagnosis,
@@ -118,6 +119,12 @@ class StaffUpdateIn(BaseModel):
     password: str | None = None
 
 
+class SettingsUpdateIn(BaseModel):
+    """기준값 설정 저장 요청 본문(Story 5.5, FR14). 지금은 대기 초과 기준 시간 1개."""
+
+    stage_overdue_minutes: int
+
+
 # 인계 메모 길이 상한(Story 4.2). 메모는 모든 조회 묶음·broadcast에 실려 나가므로
 # 무한 길이 입력이 응답을 비대화하지 않도록 서버에서 상한을 강제(빈 메모 422와 같은 게이트).
 HANDOVER_NOTE_MAX_LEN = 2000
@@ -136,8 +143,14 @@ CHECKLIST_KEYS = {item["key"] for item in CHECKLIST_ITEMS}
 STAGE_ORDER = ["접수", "진료", "검사", "수납"]
 
 # 한 단계에 이 분(分) 이상 머물면 '대기 초과'로 판정(Story 4.4, FR10).
-# 관리자가 직접 바꾸는 기능(FR14)은 Story 5.5 — 지금은 백엔드 상수 단일 기준.
+# Story 5.5(FR14)부터 관리자가 DB 설정(AppSetting)으로 바꾼다 — 이 상수는 '기본값/폴백'으로
+# 남는다(설정 행이 없거나 깨졌을 때 안전 동작). 읽기는 get_overdue_threshold로 일원화.
 STAGE_OVERDUE_MINUTES = 30
+
+# 대기 초과 기준 시간 설정(Story 5.5, FR14) — AppSetting 키와 허용 범위(1분~24시간).
+SETTING_OVERDUE_KEY = "stage_overdue_minutes"
+OVERDUE_MINUTES_MIN = 1       # 1분
+OVERDUE_MINUTES_MAX = 1440    # 24시간
 
 
 # 권한(role)은 2단계만 — 관리자 페이지 접근 여부(Story 5.2). 세분화 권한은 Story 5.3.
@@ -265,20 +278,40 @@ def next_stage(stage: str) -> str | None:
     return None
 
 
+def get_overdue_threshold(session: Session) -> int:
+    """대기 초과 기준 시간(분)을 읽는다(Story 5.5, FR14).
+
+    AppSetting에 저장된 값을 우선 쓰고, 없거나 숫자로 못 바꾸면 기본값(STAGE_OVERDUE_MINUTES,
+    30분)으로 안전 폴백한다 → 설정이 비어 있어도 기존 4.4/5.4 동작이 그대로 유지(무회귀).
+    """
+    row = session.get(AppSetting, SETTING_OVERDUE_KEY)
+    if row is None:
+        return STAGE_OVERDUE_MINUTES
+    try:
+        value = int(row.value)
+    except (TypeError, ValueError):
+        return STAGE_OVERDUE_MINUTES
+    # 읽기측 방어(코드 리뷰): 범위 밖 저장값(수동 DB 수정·구버전 데이터 등)도 안전 범위로
+    # 클램프 → PUT 검증(1~1440)과 일치. 0/음수가 들어가도 전원 대기초과로 깨지지 않는다.
+    return max(OVERDUE_MINUTES_MIN, min(OVERDUE_MINUTES_MAX, value))
+
+
 def stage_wait_info(
-    entered_at: datetime | None, now: datetime
+    entered_at: datetime | None,
+    now: datetime,
+    threshold: int = STAGE_OVERDUE_MINUTES,
 ) -> tuple[int | None, bool]:
     """현재 단계 진입 시각 → (대기 분, 대기초과 여부)(Story 4.4).
 
     진입 기록이 없으면 (None, False). 음수(시계 역행)는 0으로 보정.
-    기준(STAGE_OVERDUE_MINUTES) 이상이면 대기 초과(True).
+    threshold(기본=상수) 이상이면 대기 초과(True). 5.5부터 호출부가 설정값을 주입한다.
     """
     if entered_at is None:
         return None, False
     minutes = int((now - entered_at).total_seconds() // 60)
     if minutes < 0:
         minutes = 0
-    return minutes, minutes >= STAGE_OVERDUE_MINUTES
+    return minutes, minutes >= threshold
 
 
 # 투약 시간 문자열에서 유효한 "HH:MM"만 골라내는 정규식(00:00~23:59)
@@ -558,6 +591,14 @@ async def lifespan(app: FastAPI):
                     )
                 )
                 session.commit()
+            # 대기 초과 기준 시간 설정 시드(5.5, 멱등) — 키가 없을 때만 기본값(30)으로 생성.
+            # 헬퍼가 없을 때 30을 반환하므로 기능상 필수는 아니지만, GET 설정이 '실제 저장된 값'을
+            # 돌려주고 첫 설정 화면이 30으로 채워지도록 시드한다(admin1 블록과 동일한 멱등 패턴).
+            if session.get(AppSetting, SETTING_OVERDUE_KEY) is None:
+                session.add(
+                    AppSetting(key=SETTING_OVERDUE_KEY, value=str(STAGE_OVERDUE_MINUTES))
+                )
+                session.commit()
             # 시드 계정 직군 백필(5.2, 멱등) — 직군이 비어 있을 때만 채운다(데모 가시성).
             _seed_job_titles = {"nurse1": "간호사", "admin1": "원무과"}
             _jt_changed = False
@@ -711,11 +752,13 @@ def admin_dashboard(
         stage_distribution.append({"stage": "기타", "count": etc})
 
     # 평균 대기시간·초과 인원 — StageEntry(환자당 1건, 소규모) 기준. stage_wait_info 재사용.
+    # 기준 시간은 설정값(5.5) — 요청당 1회 읽어 주입.
+    threshold = get_overdue_threshold(session)
     entries = session.exec(select(StageEntry)).all()
     waits: list[int] = []
     overdue_count = 0
     for e in entries:
-        minutes, is_overdue = stage_wait_info(e.entered_at, now)
+        minutes, is_overdue = stage_wait_info(e.entered_at, now, threshold)
         if minutes is not None:
             waits.append(minutes)
             if is_overdue:
@@ -729,7 +772,7 @@ def admin_dashboard(
         "stage_distribution": stage_distribution,  # [{stage, count}] 접수→수납(+기타)
         "avg_wait_minutes": avg_wait_minutes,
         "overdue_count": overdue_count,
-        "overdue_threshold_minutes": STAGE_OVERDUE_MINUTES,  # 표시용(5.5 전 하드코딩)
+        "overdue_threshold_minutes": threshold,  # 5.5: 설정값(기본 30) 반영
     }
 
 
@@ -861,6 +904,53 @@ def delete_staff(
     return {"deleted": staff_id}
 
 
+@app.get("/api/admin/settings")
+def get_settings(
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2) — 일반 직원 403
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """기준값 설정 조회(Story 5.5, FR14). 현재 대기 초과 기준 시간 + 허용 범위."""
+    return {
+        "stage_overdue_minutes": get_overdue_threshold(session),
+        "min": OVERDUE_MINUTES_MIN,
+        "max": OVERDUE_MINUTES_MAX,
+    }
+
+
+@app.put("/api/admin/settings")
+def update_settings(
+    payload: SettingsUpdateIn,
+    current: Staff = Depends(get_current_admin),  # 관리자만(NFR2) — 일반 직원 403
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """기준값 설정 저장(Story 5.5, FR14). 1~1440분만 허용(범위 밖 422). 업서트.
+
+    저장만 하면 다음 조회부터 list_patients(4.4)·admin_dashboard(5.4)가 새 값을 읽어
+    자동 반영된다(읽을 때 계산 — 별도 캐시 무효화 불필요).
+    """
+    v = payload.stage_overdue_minutes
+    if v < OVERDUE_MINUTES_MIN or v > OVERDUE_MINUTES_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"대기 초과 기준 시간은 {OVERDUE_MINUTES_MIN}~{OVERDUE_MINUTES_MAX}분 "
+                "사이여야 합니다."
+            ),
+        )
+    row = session.get(AppSetting, SETTING_OVERDUE_KEY)
+    if row is None:
+        row = AppSetting(key=SETTING_OVERDUE_KEY, value=str(v))
+    else:
+        row.value = str(v)
+    session.add(row)
+    session.commit()
+    return {
+        "stage_overdue_minutes": v,
+        "min": OVERDUE_MINUTES_MIN,
+        "max": OVERDUE_MINUTES_MAX,
+    }
+
+
 @app.get("/api/patients")
 def list_patients(
     q: str | None = None,  # 검색어(선택): 이름 또는 등록번호 부분일치. 비면 전체 목록(2.2)
@@ -884,13 +974,14 @@ def list_patients(
     patients = session.exec(stmt.order_by(Patient.registration_number)).all()
     # 대기 시간(4.4): 전 환자의 단계 진입 시각을 한 번에 조회해 맵으로(N+1 방지).
     now = datetime.now()
+    threshold = get_overdue_threshold(session)  # 5.5: 대기 초과 기준(설정값) 요청당 1회
     entered_map = {
         e.patient_id: e.entered_at
         for e in session.exec(select(StageEntry)).all()
     }
     result = []
     for p in patients:
-        waiting_minutes, is_overdue = stage_wait_info(entered_map.get(p.id), now)
+        waiting_minutes, is_overdue = stage_wait_info(entered_map.get(p.id), now, threshold)
         result.append(
             {
                 "id": p.id,

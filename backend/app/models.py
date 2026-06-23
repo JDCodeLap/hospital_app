@@ -200,3 +200,17 @@ class StageEntry(SQLModel, table=True):
     patient_id: int = Field(foreign_key="patient.id", index=True, unique=True)  # 환자당 1건
     stage: str  # 현재 단계(접수/진료/검사/수납)
     entered_at: datetime  # 그 단계에 들어온 시각
+
+
+class AppSetting(SQLModel, table=True):
+    """앱 전역 설정 key/value 저장소(Story 5.5, FR14).
+
+    관리자가 바꾸는 기준값을 DB에 보관한다. 지금은 'stage_overdue_minutes'(대기 초과 기준
+    시간) 1개. 값은 문자열로 저장하고(일반 key/value) 읽는 쪽에서 형변환한다 → 향후 다른
+    기준값도 같은 테이블 재사용. 새 테이블이라 create_all로 생성(마이그레이션 불필요).
+    """
+
+    __tablename__ = "app_setting"
+
+    key: str = Field(primary_key=True)  # 설정 이름(예: "stage_overdue_minutes")
+    value: str  # 값(문자열로 저장 — int 등은 읽을 때 변환)
