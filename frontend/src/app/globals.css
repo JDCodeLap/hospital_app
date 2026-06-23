@@ -167,3 +167,25 @@
     "GRAD" 0,
     "opsz" 24;
 }
+
+/* 화면 전환 fade-in — 투명도+살짝 위로(transform) 방식이라 그래픽 칩(GPU)이 처리, 가볍다.
+   본문에 key={pathname}을 줘서 화면이 바뀔 때마다 다시 재생된다. */
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.page-fade-in {
+  animation: page-fade-in 0.28s ease-out;
+}
+/* 움직임 최소화를 선호하는 사용자(접근성 설정)에겐 애니메이션을 끈다. */
+@media (prefers-reduced-motion: reduce) {
+  .page-fade-in {
+    animation: none;
+  }
+}

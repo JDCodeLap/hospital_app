@@ -160,8 +160,9 @@ export function AppShell({
 
         {/* ── 본문 ───────────────────────────── (하단 바가 없으므로 아래 여백 일반값) */}
         <main
+          key={pathname} // 화면(주소)이 바뀔 때마다 본문을 다시 그려 fade-in을 재생
           className={
-            "mx-auto w-full flex-1 p-4 md:p-6 " +
+            "page-fade-in mx-auto w-full flex-1 p-4 md:p-6 " +
             (wide ? "max-w-none" : "max-w-5xl")
           }
         >
