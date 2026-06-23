@@ -14,6 +14,7 @@ import { useParams, useRouter } from "next/navigation";
 import { API_BASE, WS_BASE } from "@/lib/api";
 import { authHeader, clearToken, getToken } from "@/lib/auth";
 import { fmtDate, fmtDateTime } from "@/lib/format";
+import { stageStyle } from "@/lib/stage";
 import { PrescribeForm } from "@/components/PrescribeForm";
 import {
   MedicationList,
@@ -37,6 +38,8 @@ type PatientBundle = {
     age: number;
     birth_date: string;
     gender: string;
+    phone: string;
+    resident_id: string; // 마스킹된 주민번호(예: 901020-1******)
     allergies: string;
     current_stage: string;
   };
@@ -289,11 +292,31 @@ function DetailContent({
               {p.age}세 · {genderLabel(p.gender)}
             </span>
           </div>
-          <div className="mt-1 flex items-center gap-1 font-mono text-sm text-text-secondary">
-            <Icon name="badge" className="text-base" />
-            {p.registration_number}
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-sm text-text-secondary">
+            <span className="flex items-center gap-1">
+              <Icon name="badge" className="text-base" />
+              {p.registration_number}
+            </span>
+            {p.resident_id && (
+              <span className="flex items-center gap-1">
+                <Icon name="fingerprint" className="text-base" />
+                {p.resident_id}
+              </span>
+            )}
+            {p.phone && (
+              <span className="flex items-center gap-1">
+                <Icon name="call" className="text-base" />
+                {p.phone}
+              </span>
+            )}
           </div>
         </div>
+        {/* 현재 단계 배지(단계별 색) — 아래 타임라인과 함께 '지금 어디'를 한눈에 */}
+        <span
+          className={`shrink-0 self-start rounded-full px-3 py-1 text-caption font-semibold ${stageStyle(p.current_stage).bg} ${stageStyle(p.current_stage).text}`}
+        >
+          {p.current_stage}
+        </span>
       </div>
 
       {/* 환자 단계 타임라인(Story 4.1) — 접수→진료→검사→수납 진행 현황 */}

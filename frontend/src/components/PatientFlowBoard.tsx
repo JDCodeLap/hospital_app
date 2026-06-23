@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
+import { stageStyle } from "@/lib/stage";
 import { Icon } from "@/components/Icon";
 import { PatientCard, type PatientSummary } from "@/components/PatientSearch";
 
@@ -135,11 +136,16 @@ export function PatientFlowBoard() {
             <section
               key={g.stage}
               aria-label={`${g.stage} 단계 환자`}
-              className="flex flex-col gap-3 rounded-xl border border-border-subtle bg-bg-base p-3"
+              className={`flex flex-col gap-3 rounded-xl border bg-bg-base p-3 ${stageStyle(g.stage).border}`}
             >
-              {/* 그룹 헤더: 단계명 + 인원수 (+ 대기 초과 수 앰버 배지) */}
+              {/* 그룹 헤더: 단계명(단계색 점) + 인원수 (+ 대기 초과 수 앰버 배지) */}
               <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-semibold text-text-primary">
+                <h2
+                  className={`flex items-center gap-1.5 text-sm font-semibold ${stageStyle(g.stage).text}`}
+                >
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${stageStyle(g.stage).dot}`}
+                  />
                   {g.stage}
                 </h2>
                 <div className="flex items-center gap-1.5">
@@ -149,7 +155,9 @@ export function PatientFlowBoard() {
                       {g.patients.filter((p) => p.is_overdue).length}
                     </span>
                   )}
-                  <span className="rounded-full bg-accent-primary/10 px-2 py-0.5 text-caption font-semibold text-accent-primary">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-caption font-semibold ${stageStyle(g.stage).bg} ${stageStyle(g.stage).text}`}
+                  >
                     {g.patients.length}명
                   </span>
                 </div>

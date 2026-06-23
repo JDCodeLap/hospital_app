@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
+import { stageStyle } from "@/lib/stage";
 import { Icon } from "@/components/Icon";
 
 // 목록 응답 한 건의 모양(백엔드 list_patients 요약 + allergies)
@@ -201,9 +202,11 @@ export function PatientCard({
         </p>
       </div>
 
-      {/* 현재 단계 배지 + 화살표 (흐름판에선 단계가 그룹과 중복이라 hideStage로 숨김) */}
+      {/* 현재 단계 배지(단계별 색) + 화살표 (흐름판에선 단계가 그룹과 중복이라 hideStage로 숨김) */}
       {!hideStage && (
-        <span className="shrink-0 rounded-full bg-bg-elevated px-3 py-1 text-caption text-text-secondary">
+        <span
+          className={`shrink-0 rounded-full px-3 py-1 text-caption font-medium ${stageStyle(patient.current_stage).bg} ${stageStyle(patient.current_stage).text}`}
+        >
           {patient.current_stage}
         </span>
       )}

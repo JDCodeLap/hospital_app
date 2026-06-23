@@ -47,6 +47,10 @@ class Patient(SQLModel, table=True):
     name: str = Field(index=True)  # 이름(2.2 검색 대비 인덱스)
     birth_date: date  # 생년월일 → 나이는 조회 시 계산
     gender: str = "기타"  # "M" / "F" / "기타"
+    phone: str = ""  # 전화번호(환자 정보 보강). 기존 테이블엔 멱등 ALTER로 보강.
+    # 주민등록번호(민감정보) — DB엔 보관하되 API 응답은 반드시 마스킹(mask_resident_id)해서 내보낸다.
+    # ★ 데모용 더미값이며, 실제 운영에선 암호화 저장·접근통제·감사가 필요(deferred-work 참고).
+    resident_id: str = ""  # 기존 테이블엔 멱등 ALTER로 보강.
     allergies: str = ""  # 콤마구분, Epic 3 안전경고용 (예: "페니실린")
     current_stage: str = "접수"  # 접수/진료/검사/수납 (Epic 4 대비 기본값)
 

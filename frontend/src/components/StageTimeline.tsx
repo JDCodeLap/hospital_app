@@ -62,11 +62,11 @@ export function StageTimeline({ currentStage }: { currentStage: string }) {
 
               {/* 단계 점(dot) */}
               <div
-                className={`relative z-10 mb-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-2 border-[#f7f9fb] ${
+                className={`relative z-10 mb-1.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-2 border-bg-surface ${
                   st === "done"
-                    ? "bg-success text-[#06281c]"
+                    ? "bg-success text-bg-base"
                     : st === "now"
-                      ? "bg-accent-primary text-accent-on shadow-[0_0_0_4px_rgba(0,80,203,0.2)]"
+                      ? "bg-accent-primary text-accent-on shadow-[0_0_0_4px_rgba(62,207,142,0.25)]"
                       : "bg-bg-elevated text-text-muted"
                 }`}
               >

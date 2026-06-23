@@ -331,6 +331,18 @@ def parse_schedule_times(schedule: str) -> list[str]:
     return sorted(times)
 
 
+def mask_resident_id(rid: str) -> str:
+    """주민등록번호 마스킹(민감정보 보호): 앞 7자리만 보이고 뒷 6자리는 가린다.
+
+    예: '9010201234567' → '901020-1******'. 형식 미달(7자리 미만)이면 빈 문자열로
+    반환해 아무것도 노출하지 않는다. ★ 응답에는 항상 이 마스킹 결과만 싣는다(원본 금지).
+    """
+    digits = (rid or "").replace("-", "").strip()
+    if len(digits) < 7:
+        return ""
+    return f"{digits[:6]}-{digits[6]}******"
+
+
 def calc_age(birth: date, today: date | None = None) -> int:
     """생년월일 → 만 나이 계산."""
     today = today or date.today()
@@ -527,6 +539,36 @@ def backfill_stage_entries(session: Session) -> None:
         session.commit()
 
 
+def backfill_patient_pii(session: Session) -> None:
+    """기존 환자에 전화번호·주민번호(더미)를 채운다(빈 값일 때만, 멱등).
+
+    주민번호는 생년월일+성별로 앞 7자리(YYMMDD+성별코드)를 만들고 뒷 6자리는 결정적 더미다.
+    (1900년대생 남1·여2 / 2000년대생 남3·여4) — 화면엔 마스킹되어 뒷자리가 노출되지 않는다.
+    ★ 데모용 가짜값. 실제 운영에선 민감정보라 암호화·접근통제·감사가 필요(deferred-work).
+    이미 값이 있는 환자는 건너뛴다 → 재시작해도 다시 바뀌지 않음.
+    """
+    patients = session.exec(select(Patient).order_by(Patient.id)).all()
+    changed = False
+    for i, p in enumerate(patients):
+        if not p.resident_id:
+            yymmdd = p.birth_date.strftime("%y%m%d")
+            century_2000 = p.birth_date.year >= 2000
+            if p.gender == "F":
+                code = "4" if century_2000 else "2"
+            else:  # M 또는 기타
+                code = "3" if century_2000 else "1"
+            tail = f"{((i + 1) * 137417) % 1000000:06d}"  # 더미 뒷자리(결정적)
+            p.resident_id = f"{yymmdd}{code}{tail}"
+            session.add(p)
+            changed = True
+        if not p.phone:
+            p.phone = f"010-{(1234 + i * 311) % 9000 + 1000:04d}-{(5678 + i * 137) % 9000 + 1000:04d}"
+            session.add(p)
+            changed = True
+    if changed:
+        session.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 서버 시작 시: 테이블 생성 + 비어 있으면 테스트/계정 샘플 시드
@@ -551,6 +593,13 @@ async def lifespan(app: FastAPI):
                     "ALTER TABLE staff "
                     "ADD COLUMN IF NOT EXISTS access_scope VARCHAR NOT NULL DEFAULT 'all'"
                 )
+            )
+            # 환자 전화번호·주민번호 컬럼도 멱등 보강(환자 정보 보강). 기본 ''로 추가 후 백필.
+            session.execute(
+                text("ALTER TABLE patient ADD COLUMN IF NOT EXISTS phone VARCHAR NOT NULL DEFAULT ''")
+            )
+            session.execute(
+                text("ALTER TABLE patient ADD COLUMN IF NOT EXISTS resident_id VARCHAR NOT NULL DEFAULT ''")
             )
             session.commit()
             # 연결 증명용 테스트 데이터(1.2)
@@ -616,6 +665,8 @@ async def lifespan(app: FastAPI):
             seed_patients(session)
             # 환자 단계 진입 시각 백필(4.4) — 기록 없는 환자만(멱등)
             backfill_stage_entries(session)
+            # 환자 전화번호·주민번호 백필 — 빈 값인 환자만(멱등)
+            backfill_patient_pii(session)
     except OperationalError as exc:
         # DB가 꺼져 있을 때 알 수 없는 스택트레이스 대신 친절한 안내 후 시작 중단
         raise RuntimeError(
@@ -1085,6 +1136,8 @@ def get_patient(
             "age": calc_age(patient.birth_date),
             "birth_date": patient.birth_date.isoformat(),
             "gender": patient.gender,
+            "phone": patient.phone,  # 전화번호
+            "resident_id": mask_resident_id(patient.resident_id),  # 주민번호(마스킹 — 원본 금지)
             "allergies": patient.allergies,
             "current_stage": patient.current_stage,
         },
