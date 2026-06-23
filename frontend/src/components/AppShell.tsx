@@ -14,6 +14,7 @@ import { API_BASE } from "@/lib/api";
 import { authHeader } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
 import { LogoutButton } from "@/components/LogoutButton";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 // 메뉴 항목 한 곳에서 관리(PC 사이드 메뉴와 폰 ☰ 서랍이 같은 목록을 씀)
 const NAV = [
@@ -47,6 +48,8 @@ export function AppShell({
   // 현재 직원의 역할(/api/auth/me) — admin이면 관리자 메뉴를 추가로 보인다.
   // 실패/미확정 시 null → 메뉴 숨김(안전 기본값). 진짜 차단은 백엔드 get_current_admin.
   const [role, setRole] = useState<string | null>(null);
+  // 지금 받을 시간이 된 투약 알림 개수 — 종 아이콘 위 빨간 뱃지로 보여준다(놓치지 않게).
+  const [alertCount, setAlertCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -73,6 +76,30 @@ export function AppShell({
       clearTimeout(timeout);
     };
   }, []);
+
+  // 투약 알림 개수를 주기적으로 받아 종 뱃지에 표시(60초마다 갱신, 화면 이동 시에도 갱신).
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCount = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/medication-alerts`, {
+          headers: { ...authHeader() },
+        });
+        if (!cancelled && res.ok) {
+          const data: unknown[] = await res.json();
+          setAlertCount(Array.isArray(data) ? data.length : 0);
+        }
+      } catch {
+        // 실패 시 뱃지 갱신만 생략(앱 사용엔 지장 없음)
+      }
+    };
+    void fetchCount();
+    const timer = setInterval(() => void fetchCount(), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [pathname]);
 
   // 전체 메뉴(관리자면 끝에 관리자 메뉴 추가) — PC 사이드 메뉴와 폰 ☰ 서랍이 함께 쓴다.
   const nav = role === "admin" ? [...NAV, ADMIN_NAV] : NAV;
@@ -124,13 +151,23 @@ export function AppShell({
           </Link>
         </div>
         <div className="flex items-center gap-1">
-          <Link
-            href="/alerts"
-            aria-label="투약 알림"
-            className="flex h-11 w-11 items-center justify-center rounded-full text-text-secondary hover:bg-bg-elevated hover:text-text-primary"
-          >
-            <Icon name="notifications" className="text-xl" />
-          </Link>
+          <Tooltip label="투약 알림">
+            <Link
+              href="/alerts"
+              aria-label={
+                alertCount > 0 ? `투약 알림 ${alertCount}건` : "투약 알림"
+              }
+              className="relative flex h-11 w-11 items-center justify-center rounded-full text-text-secondary hover:bg-bg-elevated hover:text-text-primary"
+            >
+              <Icon name="notifications" className="text-xl" />
+              {/* 안 본 알림 개수 — 0이면 숨김. 9건 넘으면 9+로 표시 */}
+              {alertCount > 0 && (
+                <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-accent-on">
+                  {alertCount > 9 ? "9+" : alertCount}
+                </span>
+              )}
+            </Link>
+          </Tooltip>
           <LogoutButton />
         </div>
       </header>

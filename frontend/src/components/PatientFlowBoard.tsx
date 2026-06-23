@@ -15,6 +15,7 @@ import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { stageStyle } from "@/lib/stage";
 import { Icon } from "@/components/Icon";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { PatientCard, type PatientSummary } from "@/components/PatientSearch";
 
 // 단계 순서 — 백엔드 STAGE_ORDER / StageTimeline과 동일하게 유지
@@ -126,7 +127,13 @@ export function PatientFlowBoard() {
 
       {/* 전체 환자 없음 */}
       {!error && !loading && total === 0 && (
-        <p className="text-sm text-text-secondary">진행 중인 환자가 없습니다.</p>
+        <EmptyState
+          icon="view_kanban"
+          title="진행 중인 환자가 없어요"
+          description="새 환자를 등록하면 여기 흐름판에 단계별로 표시돼요."
+          actionLabel="신규 환자 등록"
+          actionHref="/patients/new"
+        />
       )}
 
       {/* 단계별 보드: PC(md↑) 4열 그리드, 폰 세로 스택 */}

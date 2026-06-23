@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
+import { useToast } from "@/components/ui/Toast";
 
 // 수정 모드에서 기존 값을 채우기 위해 받는 GET 응답의 patient 부분(필요한 필드만)
 type PatientBasics = {
@@ -48,6 +49,7 @@ function genderLabel(g: string): string {
 
 export function PatientForm({ patientId }: { patientId?: number }) {
   const router = useRouter();
+  const toast = useToast();
   const isEditing = patientId != null;
 
   // 입력 칸 상태
@@ -170,9 +172,10 @@ export function PatientForm({ patientId }: { patientId?: number }) {
         return;
       }
 
-      // 성공 → 그 환자의 통합 화면으로 이동(등록은 응답의 새 id, 수정은 기존 id)
+      // 성공 → 토스트로 확실히 알리고, 그 환자의 통합 화면으로 이동(등록=새 id, 수정=기존 id)
       const saved = await res.json();
       const targetId = isEditing ? patientId : saved.id;
+      toast.success(isEditing ? "수정 내용을 저장했어요." : "새 환자를 등록했어요.");
       router.push(`/patients/${targetId}`);
     } catch {
       setError("연결에 실패했습니다. 백엔드 서버가 켜져 있는지 확인하세요.");

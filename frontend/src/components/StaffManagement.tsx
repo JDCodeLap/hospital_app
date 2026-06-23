@@ -14,6 +14,10 @@ import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
+import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/Confirm";
+import { Badge } from "@/components/ui/Badge";
+import { Tooltip } from "@/components/ui/Tooltip";
 
 type StaffRow = {
   id: number;
@@ -59,6 +63,8 @@ function scopeSummary(scope: string): string {
 
 export function StaffManagement() {
   const router = useRouter();
+  const toast = useToast();
+  const confirm = useConfirm();
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -268,7 +274,8 @@ export function StaffManagement() {
         );
         return;
       }
-      // 성공: 폼 닫고 목록 새로고침
+      // 성공: 토스트로 알리고 폼 닫고 목록 새로고침
+      toast.success(editingId == null ? "직원 계정을 등록했어요." : "직원 정보를 저장했어요.");
       closeForm();
       await load();
     } catch {
@@ -281,12 +288,14 @@ export function StaffManagement() {
 
   async function removeStaff(s: StaffRow) {
     if (busyRef.current) return;
-    // 삭제 전 한 번 더 확인(AC4)
-    if (
-      !window.confirm(`'${s.full_name || s.username}' 직원을 삭제할까요?`)
-    ) {
-      return;
-    }
+    // 삭제 전 한 번 더 확인(AC4) — 되돌리기 힘든 행동이라 예쁜 확인창으로 한 박자 멈춤
+    const ok = await confirm({
+      title: `'${s.full_name || s.username}' 직원을 삭제할까요?`,
+      message: "삭제하면 이 계정으로 더 이상 로그인할 수 없어요.",
+      confirmText: "삭제",
+      danger: true,
+    });
+    if (!ok) return;
     busyRef.current = true;
     setActionError(null);
     try {
@@ -300,9 +309,12 @@ export function StaffManagement() {
       }
       if (!res.ok) {
         // 자기 삭제·마지막 관리자·활동 기록 보호 등 백엔드 안내를 그대로 표시
-        setActionError(await readDetail(res, "삭제에 실패했습니다."));
+        const msg = await readDetail(res, "삭제에 실패했습니다.");
+        setActionError(msg);
+        toast.error(msg);
         return;
       }
+      toast.success(`'${s.full_name || s.username}' 직원을 삭제했어요.`);
       await load();
     } catch {
       setActionError("연결에 실패했습니다. 백엔드 서버가 켜져 있는지 확인하세요.");
@@ -561,30 +573,34 @@ export function StaffManagement() {
                     </span>
                   )}
                   {!s.is_active && (
-                    <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[11px] font-medium text-text-muted">
+                    <Badge tone="red" icon="block">
                       비활성
-                    </span>
+                    </Badge>
                   )}
                 </div>
               </div>
 
               <div className="flex shrink-0 gap-1">
-                <button
-                  type="button"
-                  onClick={() => openEdit(s)}
-                  aria-label={`${s.full_name || s.username} 수정`}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-elevated hover:text-text-primary"
-                >
-                  <Icon name="edit" className="text-xl" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void removeStaff(s)}
-                  aria-label={`${s.full_name || s.username} 삭제`}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-danger/10 hover:text-danger"
-                >
-                  <Icon name="delete" className="text-xl" />
-                </button>
+                <Tooltip label="수정">
+                  <button
+                    type="button"
+                    onClick={() => openEdit(s)}
+                    aria-label={`${s.full_name || s.username} 수정`}
+                    className="flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-bg-elevated hover:text-text-primary"
+                  >
+                    <Icon name="edit" className="text-xl" />
+                  </button>
+                </Tooltip>
+                <Tooltip label="삭제">
+                  <button
+                    type="button"
+                    onClick={() => void removeStaff(s)}
+                    aria-label={`${s.full_name || s.username} 삭제`}
+                    className="flex h-11 w-11 items-center justify-center rounded-lg text-text-secondary hover:bg-danger/10 hover:text-danger"
+                  >
+                    <Icon name="delete" className="text-xl" />
+                  </button>
+                </Tooltip>
               </div>
             </li>
           ))}

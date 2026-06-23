@@ -13,6 +13,8 @@ import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { useToast } from "@/components/ui/Toast";
 
 // GET /api/medication-alerts 응답 한 건
 type Alert = {
@@ -29,6 +31,7 @@ const REFRESH_MS = 60_000;
 
 export function MedicationAlerts() {
   const router = useRouter();
+  const toast = useToast();
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -114,8 +117,9 @@ export function MedicationAlerts() {
         setError("투약 완료 처리에 실패했습니다. 잠시 후 다시 시도하세요.");
         return;
       }
-      // 성공: 즉시 목록에서 제거(낙관적) + 서버 기준으로 다시 동기화
+      // 성공: 즉시 목록에서 제거(낙관적) + 서버 기준으로 다시 동기화 + 토스트로 확인
       setAlerts((prev) => (prev ? prev.filter((x) => slotKey(x) !== key) : prev));
+      toast.success(`${a.drug_name} 투약을 완료 처리했어요.`);
       void load(undefined, true);
     } catch {
       setError("연결에 실패했습니다. 백엔드 서버가 켜져 있는지 확인하세요.");
@@ -155,12 +159,11 @@ export function MedicationAlerts() {
         )}
 
         {!loading && !error && alerts && alerts.length === 0 && (
-          <div className="rounded-lg border border-border-subtle bg-bg-surface p-6 text-center">
-            <p className="font-bold text-text-primary">표시할 항목이 없습니다</p>
-            <p className="mt-1 text-sm text-text-secondary">
-              지금 받을 시간이 된 투약이 없어요.
-            </p>
-          </div>
+          <EmptyState
+            icon="medication"
+            title="표시할 항목이 없습니다"
+            description="지금 받을 시간이 된 투약이 없어요."
+          />
         )}
 
         {!loading && !error && alerts && alerts.length > 0 && (

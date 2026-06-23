@@ -14,6 +14,7 @@ import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken } from "@/lib/auth";
 import { stageStyle } from "@/lib/stage";
 import { Icon } from "@/components/Icon";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 // 목록 응답 한 건의 모양(백엔드 list_patients 요약 + allergies)
 // waiting_minutes·is_overdue는 4.4에서 추가된 선택 필드(하위호환 — 옛 응답엔 없을 수 있음)
@@ -120,7 +121,13 @@ export function PatientSearch() {
         )}
 
         {!loading && !error && results && results.length === 0 && (
-          <p className="text-sm text-text-secondary">검색 결과 없음</p>
+          <EmptyState
+            icon="person_search"
+            title="검색 결과가 없어요"
+            description="다른 이름이나 등록번호로 찾아보거나, 새 환자를 등록하세요."
+            actionLabel="신규 환자 등록"
+            actionHref="/patients/new"
+          />
         )}
 
         {!loading && !error && results && results.length > 0 && (
