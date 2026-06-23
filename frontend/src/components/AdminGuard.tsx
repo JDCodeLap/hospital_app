@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 
 import { API_BASE } from "@/lib/api";
 import { authHeader, clearToken, getToken } from "@/lib/auth";
+import { Spinner } from "@/components/Spinner";
 
 // /api/auth/me 응답을 기다리는 최대 시간(ms). 넘기면 요청 포기(AuthGuard와 동일).
 const ME_TIMEOUT_MS = 8000;
@@ -80,9 +81,7 @@ export function AdminGuard({ children }: { children: ReactNode }) {
   if (status === "checking") {
     return (
       <main className="flex min-h-screen items-center justify-center bg-bg-base p-8">
-        <p className="text-text-secondary" role="status">
-          확인 중…
-        </p>
+        <Spinner label="확인 중…" />
       </main>
     );
   }

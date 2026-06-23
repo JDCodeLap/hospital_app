@@ -10,6 +10,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import { API_BASE } from "@/lib/api";
+import { Spinner } from "@/components/Spinner";
 import { clearToken, getToken } from "@/lib/auth";
 
 // /api/auth/me 응답을 기다리는 최대 시간(ms). 이 시간을 넘기면 요청을 포기한다.
@@ -72,9 +73,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   if (status === "checking") {
     return (
       <main className="flex min-h-screen items-center justify-center bg-bg-base p-8">
-        <p className="text-text-secondary" role="status">
-          확인 중…
-        </p>
+        <Spinner label="확인 중…" />
       </main>
     );
   }
