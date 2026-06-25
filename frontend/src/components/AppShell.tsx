@@ -15,6 +15,7 @@ import { authHeader, fetchMe, getCachedMe } from "@/lib/auth";
 import { Icon } from "@/components/Icon";
 import { LogoutButton } from "@/components/LogoutButton";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { useIdleLogout } from "@/components/useIdleLogout";
 
 // 메뉴 항목 한 곳에서 관리(PC 사이드 메뉴와 폰 ☰ 서랍이 같은 목록을 씀)
 const NAV = [
@@ -40,6 +41,8 @@ export function AppShell({
   wide?: boolean;
 }) {
   const pathname = usePathname();
+  // 모바일 앱 전용: 일정 시간 미사용 시 자동 로그아웃(웹은 동작 안 함).
+  useIdleLogout();
   // 폰 더보기 서랍 열림 여부
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 현재 직원의 역할(/api/auth/me) — admin이면 관리자 메뉴를 추가로 보인다.

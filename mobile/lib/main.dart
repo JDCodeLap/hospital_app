@@ -10,6 +10,11 @@ import 'package:webview_flutter/webview_flutter.dart';
 // 배포된 웹 화면 주소(Vercel). 주소가 바뀌면 여기만 고치면 된다.
 const String kWebUrl = 'https://hospital-app-xi-ruby.vercel.app';
 
+// 웹에게 "이건 모바일 앱(WebView)에서 열린 화면"이라고 알려주는 표식.
+// 웹은 이 표식이 있으면 보안 정책(앱 종료/미사용 시 재로그인)을 켠다.
+// PC 브라우저는 이 표식 없이 접속하므로 기존처럼 로그인이 유지된다.
+const String kAppUrl = '$kWebUrl/?client=app';
+
 void main() {
   runApp(const HospitalApp());
 }
@@ -50,7 +55,7 @@ class _WebViewPageState extends State<WebViewPage> {
           onPageFinished: (_) => setState(() => _loading = false),
         ),
       )
-      ..loadRequest(Uri.parse(kWebUrl));
+      ..loadRequest(Uri.parse(kAppUrl)); // 모바일 표식(?client=app)을 붙여 첫 화면을 연다.
   }
 
   @override
